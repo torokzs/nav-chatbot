@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "${{azd.env.AZURE_LOCATION}}"
+    },
+    "environmentName": {
+      "value": "${{azd.env.AZURE_ENV_NAME}}"
+    },
+    "resourceNamePrefix": {
+      "value": "${{azd.env.RESOURCE_NAME_PREFIX}}"
+    },
+    "githubActionsPrincipalId": {
+      "value": "${{azd.env.GITHUB_ACTIONS_PRINCIPAL_ID}}"
+    },
+    "backendStableRevisionName": {
+      "value": "${{azd.env.BACKEND_STABLE_REVISION_NAME}}"
+    }
+  }
+}

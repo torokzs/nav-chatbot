@@ -1,0 +1,14 @@
+{
+  "resourceGroup": "rg",
+  "applicationInsights": "appi",
+  "logAnalyticsWorkspace": "log",
+  "keyVault": "kv",
+  "aiSearch": "srch",
+  "aiFoundry": "ais",
+  "documentIntelligence": "di",
+  "containerRegistry": "acr",
+  "containerAppEnvironment": "cae",
+  "containerApp": "aca",
+  "staticWebApp": "stapp",
+  "fabricCapacity": "fab"
+}

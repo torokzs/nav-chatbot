@@ -1,0 +1,23 @@
+name: nav-chatbot
+metadata:
+  template: nav-chatbot@0.0.1
+services:
+  backend:
+    project: ./backend
+    host: containerapp
+    language: python
+    docker:
+      path: ./backend/Dockerfile
+  frontend:
+    project: ./frontend
+    host: staticwebapp
+    language: ts
+    dist: dist
+hooks:
+  postprovision:
+    shell: sh
+    run: echo "Run Fabric notebooks manually or via pipeline to ingest data"
+infra:
+  provider: bicep
+  path: ./infra
+  module: main

@@ -1,0 +1,34 @@
+# Data
+data/*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Node
+node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Azure
+.azure/
+*.tfstate
+*.tfstate.backup
+
+# Docker
+*.log
