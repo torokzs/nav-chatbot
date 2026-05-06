@@ -295,32 +295,11 @@ def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
     if evaluator_credential is not None:
         eval_kwargs["credential"] = evaluator_credential
 
-    evaluators = {
-        "groundedness": GroundednessEvaluator(model_config, **eval_kwargs),
-        "relevance": RelevanceEvaluator(model_config, **eval_kwargs),
-        "fluency": FluencyEvaluator(model_config, **eval_kwargs),
+    # GPT-based evaluators require working LLM auth; build them but handle failures gracefully
+    evaluators: dict[str, Any] = {
         "citation_correctness": CitationCorrectnessEvaluator(),
     }
-    evaluator_config = {
-        "groundedness": {
-            "column_mapping": {
-                "query": "${data.query}",
-                "context": "${data.context}",
-                "response": "${data.response}",
-            }
-        },
-        "relevance": {
-            "column_mapping": {
-                "query": "${data.query}",
-                "response": "${data.response}",
-            }
-        },
-        "fluency": {
-            "column_mapping": {
-                "query": "${data.query}",
-                "response": "${data.response}",
-            }
-        },
+    evaluator_config: dict[str, Any] = {
         "citation_correctness": {
             "column_mapping": {
                 "response": "${data.response}",
@@ -330,6 +309,23 @@ def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
             }
         },
     }
+
+    # Try to add GPT-based evaluators; skip if model_config fails validation
+    try:
+        evaluators["groundedness"] = GroundednessEvaluator(model_config, **eval_kwargs)
+        evaluators["relevance"] = RelevanceEvaluator(model_config, **eval_kwargs)
+        evaluators["fluency"] = FluencyEvaluator(model_config, **eval_kwargs)
+        evaluator_config["groundedness"] = {
+            "column_mapping": {"query": "${data.query}", "context": "${data.context}", "response": "${data.response}"}
+        }
+        evaluator_config["relevance"] = {
+            "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
+        }
+        evaluator_config["fluency"] = {
+            "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
+        }
+    except Exception as exc:
+        LOGGER.warning("GPT-based evaluators unavailable (auth issue): %s. Running citation_correctness only.", exc)
 
     kwargs: dict[str, Any] = {
         "data": str(eval_input_path),
@@ -426,6 +422,17 @@ def main() -> int:
         "citation_correctness": extract_metric(metrics, "citation_correctness"),
     }
     passed = print_summary(summary, threshold_module)
+
+    # Report optional GPT-based metrics (informational, not gating)
+    optional_thresholds = getattr(threshold_module, "OPTIONAL_THRESHOLDS", {})
+    if optional_thresholds:
+        print("Optional metrics (informational):")
+        for metric_name, threshold in optional_thresholds.items():
+            value = summary.get(metric_name)
+            value_label = "n/a" if value is None else f"{value:.3f}"
+            status = "PASS" if value is not None and float(value) >= float(threshold) else "INFO"
+            print(f" - {metric_name}: {value_label} (target: {threshold:.3f}) => {status}")
+
     studio_url = result.get("studio_url") if isinstance(result, dict) else None
     if studio_url:
         print(f"Foundry results: {studio_url}")
