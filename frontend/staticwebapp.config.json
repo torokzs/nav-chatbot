@@ -8,11 +8,5 @@
   "navigationFallback": {
     "rewrite": "/index.html",
     "exclude": ["/assets/*", "/api/*"]
-  },
-  "forwardingGateway": {
-    "requiredHeaders": {},
-    "allowedForwardedHosts": [
-      "ca-whnqec-6otgod-backend.politeisland-50c7c91c.swedencentral.azurecontainerapps.io"
-    ]
   }
 }

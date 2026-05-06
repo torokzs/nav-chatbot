@@ -31,7 +31,7 @@ except ImportError:
 RAW_RELATIVE_PATH = os.getenv("RAW_RELATIVE_PATH", "raw/2026")
 CHUNKS_TABLE = os.getenv("CHUNKS_TABLE", "nav_chunks")
 DOCUMENTS_TABLE = os.getenv("DOCUMENTS_TABLE", "nav_documents")
-DOC_INTEL_ENDPOINT = os.getenv("DOCUMENT_INTELLIGENCE_ENDPOINT", "https://di-whnqec-6otgod.cognitiveservices.azure.com")
+DOC_INTEL_ENDPOINT = os.getenv("DOCUMENT_INTELLIGENCE_ENDPOINT", "")
 TOKEN_TARGET = int(os.getenv("CHUNK_TOKEN_TARGET", "700"))
 TOKEN_OVERLAP = int(os.getenv("CHUNK_TOKEN_OVERLAP", "100"))
 TOKENIZER = tiktoken.get_encoding("cl100k_base")

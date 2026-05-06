@@ -143,7 +143,7 @@ jobs:
 
       - name: Run integration tests
         env:
-          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://ca-whnqec-6otgod-backend.politeisland-50c7c91c.swedencentral.azurecontainerapps.io' }}
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
         run: pytest tests/integration/ -v --tb=short
 
   llm-eval-smoke:
@@ -176,15 +176,15 @@ jobs:
 
       - name: Run smoke LLM evaluation (20 questions)
         env:
-          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://ca-whnqec-6otgod-backend.politeisland-50c7c91c.swedencentral.azurecontainerapps.io' }}
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
           AZURE_AI_PROJECT_URL: ${{ vars.AZURE_AI_PROJECT_ENDPOINT }}
           AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
         working-directory: evals
         run: |
-          python run_eval.py \
-            --endpoint "$BACKEND_URL" \
+          python run_eval.py 
+            --endpoint "$BACKEND_URL" 
             --smoke
 
       - name: Upload eval results
@@ -225,14 +225,14 @@ jobs:
 
       - name: Run full LLM evaluation (100 questions)
         env:
-          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://ca-whnqec-6otgod-backend.politeisland-50c7c91c.swedencentral.azurecontainerapps.io' }}
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
           AZURE_AI_PROJECT_URL: ${{ vars.AZURE_AI_PROJECT_ENDPOINT }}
           AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
         working-directory: evals
         run: |
-          python run_eval.py \
+          python run_eval.py 
             --endpoint "$BACKEND_URL"
 
       - name: Upload full eval results

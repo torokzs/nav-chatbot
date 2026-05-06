@@ -1,7 +1,9 @@
+import os
 from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
+SEARCH_ENDPOINT = os.environ["AI_SEARCH_ENDPOINT"]
 cred = DefaultAzureCredential()
-client = SearchClient("https://srch-whnqec-6otgod.search.windows.net", "nav-documents", cred)
+client = SearchClient(SEARCH_ENDPOINT, "nav-documents", cred)
 results = client.search(search_text="*", top=1)
 for r in results:
     print(list(r.keys()))

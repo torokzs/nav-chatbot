@@ -21,9 +21,9 @@ except ImportError:
     import mssparkutils  # type: ignore
 
 
-EMBEDDING_ENDPOINT = os.getenv("EMBEDDING_ENDPOINT", "https://cog-whnqec-6otgod.cognitiveservices.azure.com")
+EMBEDDING_ENDPOINT = os.getenv("EMBEDDING_ENDPOINT", "")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
-SEARCH_ENDPOINT = os.getenv("AI_SEARCH_ENDPOINT", "https://srch-whnqec-6otgod.search.windows.net")
+SEARCH_ENDPOINT = os.getenv("AI_SEARCH_ENDPOINT", "")
 SEARCH_KEY = os.getenv("AI_SEARCH_KEY", "")  # Set via notebook parameters or env
 CHUNKS_TABLE = os.getenv("CHUNKS_TABLE", "nav_chunks")
 DOCUMENTS_TABLE = os.getenv("DOCUMENTS_TABLE", "nav_documents")
