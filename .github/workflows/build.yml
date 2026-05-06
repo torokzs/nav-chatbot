@@ -183,8 +183,8 @@ jobs:
           AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
         working-directory: evals
         run: |
-          python run_eval.py 
-            --endpoint "$BACKEND_URL" 
+          python run_eval.py \
+            --endpoint "$BACKEND_URL" \
             --smoke
 
       - name: Upload eval results
@@ -232,7 +232,7 @@ jobs:
           AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
         working-directory: evals
         run: |
-          python run_eval.py 
+          python run_eval.py \
             --endpoint "$BACKEND_URL"
 
       - name: Upload full eval results
