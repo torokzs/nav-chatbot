@@ -48,7 +48,6 @@ class CitationCorrectnessEvaluator:
         expected_fuzet: str,
         expected_page: int | str,
         sources: str | list[dict[str, Any]] | None = None,
-        **_: Any,
     ) -> dict[str, Any]:
         page = int(expected_page)
         parsed_sources = self._parse_sources(sources)
