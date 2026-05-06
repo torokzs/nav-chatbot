@@ -240,7 +240,8 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 
-def resolve_azure_ai_project() -> str | dict[str, str]:
+def resolve_azure_ai_project() -> str | dict[str, str] | None:
+    """Resolve Foundry project config for cloud logging. Returns None if not configured."""
     for key in ("AZURE_AI_PROJECT_URL", "AI_FOUNDRY_PROJECT_URL", "FOUNDRY_PROJECT_URL"):
         value = os.getenv(key)
         if value:
@@ -256,10 +257,11 @@ def resolve_azure_ai_project() -> str | dict[str, str]:
             "project_name": project_name,
         }
 
-    raise EvaluationConfigurationError(
-        "Missing Foundry project configuration. Set AZURE_AI_PROJECT_URL or the trio "
-        "AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, AZURE_AI_PROJECT_NAME."
+    LOGGER.warning(
+        "No Foundry project configured (AZURE_AI_PROJECT_URL or AZURE_SUBSCRIPTION_ID + "
+        "AZURE_RESOURCE_GROUP + AZURE_AI_PROJECT_NAME). Running evaluation locally without cloud logging."
     )
+    return None
 
 
 
@@ -326,10 +328,15 @@ def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
         "data": str(eval_input_path),
         "evaluators": evaluators,
         "evaluator_config": evaluator_config,
-        "azure_ai_project": azure_ai_project,
         "output_path": str(EVAL_OUTPUT_FILE),
-        "credential": credential,
     }
+    # Cloud logging requires a Foundry project; skip if not configured
+    if azure_ai_project is not None:
+        kwargs["azure_ai_project"] = azure_ai_project
+        kwargs["credential"] = credential
+    else:
+        LOGGER.info("Running evaluation locally (no Foundry project for cloud logging).")
+
     try:
         result = evaluate(**kwargs)
     except TypeError as exc:
