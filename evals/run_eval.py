@@ -267,7 +267,6 @@ def resolve_azure_ai_project() -> str | dict[str, str] | None:
 def resolve_model_config() -> dict[str, Any]:
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-06-01")
     api_key = os.getenv("AZURE_OPENAI_API_KEY")
 
     if not endpoint or not deployment:
@@ -278,9 +277,7 @@ def resolve_model_config() -> dict[str, Any]:
     config: dict[str, Any] = {
         "azure_endpoint": endpoint,
         "azure_deployment": deployment,
-        "api_version": api_version,
     }
-    # Prefer token-based auth (works when key auth is disabled on AI Services)
     if api_key:
         config["api_key"] = api_key
     else:
