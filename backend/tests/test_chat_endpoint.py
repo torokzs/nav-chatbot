@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -122,8 +123,13 @@ async def test_chat_endpoint_streams_error_event(mock_settings: Settings) -> Non
 
 
 @pytest.mark.asyncio
-async def test_get_document_pdf_serves_matching_pdf(mock_settings: Settings) -> None:
+async def test_get_document_pdf_serves_matching_pdf(mock_settings: Settings, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     _reset_sse_app_status()
+    # Create a fake PDF in a temp directory
+    fake_pdf = tmp_path / "01_TestBooklet_2026.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake content")
+    monkeypatch.setattr(chat_router, "DATA_DIR", tmp_path)
+
     app = create_app()
     app.state.settings = mock_settings
     app.state.retrieval_service = FakeRetrievalService()
