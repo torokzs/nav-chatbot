@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -15,8 +16,6 @@ from app.services.citation import format_citations
 from app.services.llm import LLMService
 from app.services.query_rewrite import rewrite_query
 from app.services.retrieval import RetrievalService
-
-import os
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
