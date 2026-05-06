@@ -264,21 +264,29 @@ def resolve_azure_ai_project() -> str | dict[str, str] | None:
 
 
 
-def resolve_model_config() -> dict[str, str]:
+def resolve_model_config() -> dict[str, Any]:
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    api_key = os.getenv("AZURE_OPENAI_API_KEY")
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
     api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-06-01")
-    if not endpoint or not api_key or not deployment:
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+
+    if not endpoint or not deployment:
         raise EvaluationConfigurationError(
-            "Missing evaluator model configuration. Set AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY and AZURE_OPENAI_DEPLOYMENT."
+            "Missing evaluator model configuration. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT."
         )
-    return {
+
+    config: dict[str, Any] = {
         "azure_endpoint": endpoint,
-        "api_key": api_key,
         "azure_deployment": deployment,
         "api_version": api_version,
     }
+    # Prefer token-based auth (works when key auth is disabled on AI Services)
+    if api_key:
+        config["api_key"] = api_key
+    else:
+        LOGGER.info("No AZURE_OPENAI_API_KEY set; using DefaultAzureCredential for evaluator model.")
+        config["credential"] = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+    return config
 
 
 
