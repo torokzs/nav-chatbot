@@ -264,7 +264,8 @@ def resolve_azure_ai_project() -> str | dict[str, str] | None:
 
 
 
-def resolve_model_config() -> dict[str, Any]:
+def resolve_model_config() -> tuple[dict[str, str], Any]:
+    """Return (model_config_dict, credential_or_None)."""
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
     api_key = os.getenv("AZURE_OPENAI_API_KEY")
@@ -274,28 +275,30 @@ def resolve_model_config() -> dict[str, Any]:
             "Missing evaluator model configuration. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT."
         )
 
-    config: dict[str, Any] = {
+    config: dict[str, str] = {
         "azure_endpoint": endpoint,
         "azure_deployment": deployment,
     }
     if api_key:
         config["api_key"] = api_key
-    else:
-        LOGGER.info("No AZURE_OPENAI_API_KEY set; using DefaultAzureCredential for evaluator model.")
-        config["credential"] = DefaultAzureCredential(exclude_interactive_browser_credential=True)
-    return config
+        return config, None
+    LOGGER.info("No AZURE_OPENAI_API_KEY set; using DefaultAzureCredential for evaluator model.")
+    return config, DefaultAzureCredential(exclude_interactive_browser_credential=True)
 
 
 
 def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
-    model_config = resolve_model_config()
+    model_config, evaluator_credential = resolve_model_config()
     azure_ai_project = resolve_azure_ai_project()
-    credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+
+    eval_kwargs: dict[str, Any] = {}
+    if evaluator_credential is not None:
+        eval_kwargs["credential"] = evaluator_credential
 
     evaluators = {
-        "groundedness": GroundednessEvaluator(model_config),
-        "relevance": RelevanceEvaluator(model_config),
-        "fluency": FluencyEvaluator(model_config),
+        "groundedness": GroundednessEvaluator(model_config, **eval_kwargs),
+        "relevance": RelevanceEvaluator(model_config, **eval_kwargs),
+        "fluency": FluencyEvaluator(model_config, **eval_kwargs),
         "citation_correctness": CitationCorrectnessEvaluator(),
     }
     evaluator_config = {
@@ -337,7 +340,8 @@ def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
     # Cloud logging requires a Foundry project; skip if not configured
     if azure_ai_project is not None:
         kwargs["azure_ai_project"] = azure_ai_project
-        kwargs["credential"] = credential
+        if evaluator_credential is not None:
+            kwargs["credential"] = evaluator_credential
     else:
         LOGGER.info("Running evaluation locally (no Foundry project for cloud logging).")
 
