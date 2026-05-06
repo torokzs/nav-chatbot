@@ -54,11 +54,11 @@ describe('MessageBubble', () => {
     expect(screen.getByText('első pont')).toBeInTheDocument();
 
     const primarySource = screen.getByRole('link', {
-      name: '[12] Általános forgalmi adó, 3-5. oldal',
+      name: '[1] Általános forgalmi adó, 3-5. oldal',
     });
     expect(primarySource).toHaveAttribute('href', '/api/documents/12/pdf');
     expect(screen.getAllByRole('link')).toHaveLength(3);
-    expect(screen.queryByRole('link', { name: '[99] Negyedik forrás, 1. oldal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '[4] Negyedik forrás, 1. oldal' })).not.toBeInTheDocument();
   });
 
   it('renders streaming state', () => {
