@@ -123,7 +123,9 @@ async def test_chat_endpoint_streams_error_event(mock_settings: Settings) -> Non
 
 
 @pytest.mark.asyncio
-async def test_get_document_pdf_serves_matching_pdf(mock_settings: Settings, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+async def test_get_document_pdf_serves_matching_pdf(
+    mock_settings: Settings, tmp_path: Path, monkeypatch: MonkeyPatch,
+) -> None:
     _reset_sse_app_status()
     # Create a fake PDF in a temp directory
     fake_pdf = tmp_path / "01_TestBooklet_2026.pdf"
