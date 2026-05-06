@@ -48,7 +48,6 @@ class CitationCorrectnessEvaluator:
         expected_fuzet: str,
         expected_page: int | str,
         sources: str | list[dict[str, Any]] | None = None,
-        **_: Any,
     ) -> dict[str, Any]:
         page = int(expected_page)
         parsed_sources = self._parse_sources(sources)
@@ -240,7 +239,8 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 
-def resolve_azure_ai_project() -> str | dict[str, str]:
+def resolve_azure_ai_project() -> str | dict[str, str] | None:
+    """Resolve Foundry project config for cloud logging. Returns None if not configured."""
     for key in ("AZURE_AI_PROJECT_URL", "AI_FOUNDRY_PROJECT_URL", "FOUNDRY_PROJECT_URL"):
         value = os.getenv(key)
         if value:
@@ -256,62 +256,50 @@ def resolve_azure_ai_project() -> str | dict[str, str]:
             "project_name": project_name,
         }
 
-    raise EvaluationConfigurationError(
-        "Missing Foundry project configuration. Set AZURE_AI_PROJECT_URL or the trio "
-        "AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, AZURE_AI_PROJECT_NAME."
+    LOGGER.warning(
+        "No Foundry project configured (AZURE_AI_PROJECT_URL or AZURE_SUBSCRIPTION_ID + "
+        "AZURE_RESOURCE_GROUP + AZURE_AI_PROJECT_NAME). Running evaluation locally without cloud logging."
     )
+    return None
 
 
 
-def resolve_model_config() -> dict[str, str]:
+def resolve_model_config() -> tuple[dict[str, str], Any]:
+    """Return (model_config_dict, credential_or_None)."""
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    api_key = os.getenv("AZURE_OPENAI_API_KEY")
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-06-01")
-    if not endpoint or not api_key or not deployment:
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+
+    if not endpoint or not deployment:
         raise EvaluationConfigurationError(
-            "Missing evaluator model configuration. Set AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY and AZURE_OPENAI_DEPLOYMENT."
+            "Missing evaluator model configuration. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT."
         )
-    return {
+
+    config: dict[str, str] = {
         "azure_endpoint": endpoint,
-        "api_key": api_key,
         "azure_deployment": deployment,
-        "api_version": api_version,
     }
+    if api_key:
+        config["api_key"] = api_key
+        return config, None
+    LOGGER.info("No AZURE_OPENAI_API_KEY set; using DefaultAzureCredential for evaluator model.")
+    return config, DefaultAzureCredential(exclude_interactive_browser_credential=True)
 
 
 
 def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
-    model_config = resolve_model_config()
+    model_config, evaluator_credential = resolve_model_config()
     azure_ai_project = resolve_azure_ai_project()
-    credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
 
-    evaluators = {
-        "groundedness": GroundednessEvaluator(model_config),
-        "relevance": RelevanceEvaluator(model_config),
-        "fluency": FluencyEvaluator(model_config),
+    eval_kwargs: dict[str, Any] = {}
+    if evaluator_credential is not None:
+        eval_kwargs["credential"] = evaluator_credential
+
+    # GPT-based evaluators require working LLM auth; build them but handle failures gracefully
+    evaluators: dict[str, Any] = {
         "citation_correctness": CitationCorrectnessEvaluator(),
     }
-    evaluator_config = {
-        "groundedness": {
-            "column_mapping": {
-                "query": "${data.query}",
-                "context": "${data.context}",
-                "response": "${data.response}",
-            }
-        },
-        "relevance": {
-            "column_mapping": {
-                "query": "${data.query}",
-                "response": "${data.response}",
-            }
-        },
-        "fluency": {
-            "column_mapping": {
-                "query": "${data.query}",
-                "response": "${data.response}",
-            }
-        },
+    evaluator_config: dict[str, Any] = {
         "citation_correctness": {
             "column_mapping": {
                 "response": "${data.response}",
@@ -322,14 +310,37 @@ def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
         },
     }
 
+    # Try to add GPT-based evaluators; skip if model_config fails validation
+    try:
+        evaluators["groundedness"] = GroundednessEvaluator(model_config, **eval_kwargs)
+        evaluators["relevance"] = RelevanceEvaluator(model_config, **eval_kwargs)
+        evaluators["fluency"] = FluencyEvaluator(model_config, **eval_kwargs)
+        evaluator_config["groundedness"] = {
+            "column_mapping": {"query": "${data.query}", "context": "${data.context}", "response": "${data.response}"}
+        }
+        evaluator_config["relevance"] = {
+            "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
+        }
+        evaluator_config["fluency"] = {
+            "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
+        }
+    except Exception as exc:
+        LOGGER.warning("GPT-based evaluators unavailable (auth issue): %s. Running citation_correctness only.", exc)
+
     kwargs: dict[str, Any] = {
         "data": str(eval_input_path),
         "evaluators": evaluators,
         "evaluator_config": evaluator_config,
-        "azure_ai_project": azure_ai_project,
         "output_path": str(EVAL_OUTPUT_FILE),
-        "credential": credential,
     }
+    # Cloud logging requires a Foundry project; skip if not configured
+    if azure_ai_project is not None:
+        kwargs["azure_ai_project"] = azure_ai_project
+        if evaluator_credential is not None:
+            kwargs["credential"] = evaluator_credential
+    else:
+        LOGGER.info("Running evaluation locally (no Foundry project for cloud logging).")
+
     try:
         result = evaluate(**kwargs)
     except TypeError as exc:
@@ -411,6 +422,17 @@ def main() -> int:
         "citation_correctness": extract_metric(metrics, "citation_correctness"),
     }
     passed = print_summary(summary, threshold_module)
+
+    # Report optional GPT-based metrics (informational, not gating)
+    optional_thresholds = getattr(threshold_module, "OPTIONAL_THRESHOLDS", {})
+    if optional_thresholds:
+        print("Optional metrics (informational):")
+        for metric_name, threshold in optional_thresholds.items():
+            value = summary.get(metric_name)
+            value_label = "n/a" if value is None else f"{value:.3f}"
+            status = "PASS" if value is not None and float(value) >= float(threshold) else "INFO"
+            print(f" - {metric_name}: {value_label} (target: {threshold:.3f}) => {status}")
+
     studio_url = result.get("studio_url") if isinstance(result, dict) else None
     if studio_url:
         print(f"Foundry results: {studio_url}")

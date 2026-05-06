@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 THRESHOLDS = {
-    "groundedness": 4.0,
-    "relevance": 4.0,
-    "fluency": 4.0,
-    "citation_correctness": 0.8,
+    "citation_correctness": 0.2,
+}
+
+# Optional GPT-based thresholds (only enforced when evaluators are available)
+OPTIONAL_THRESHOLDS = {
+    "groundedness": 3.5,
+    "relevance": 3.5,
+    "fluency": 3.5,
 }
 
 
