@@ -13,6 +13,25 @@ permissions:
   contents: read
 
 jobs:
+  eval-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: evals/requirements.txt
+
+      - name: Install evaluation dependencies
+        run: pip install -r evals/requirements.txt
+
+      - name: Test benchmark logic
+        run: pytest evals/tests -q
+
   backend:
     runs-on: ubuntu-latest
     steps:

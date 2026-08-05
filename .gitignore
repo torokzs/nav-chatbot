@@ -30,5 +30,10 @@ Thumbs.db
 *.tfstate
 *.tfstate.backup
 
+# Evaluation outputs
+evals/benchmark-results/
+evals/.foundry_eval_input.jsonl
+evals/foundry_eval_results.json
+
 # Docker
 *.log

@@ -66,6 +66,20 @@ async def stream_chat(
                 rewritten_queries,
             )
 
+            if payload.include_evaluation_context:
+                yield _to_sse_message(
+                    ChatEvent(
+                        type="context",
+                        content=[
+                            {
+                                "content": chunk.content,
+                                "metadata": chunk.metadata,
+                            }
+                            for chunk in context_chunks
+                        ],
+                    )
+                )
+
             async for token in llm_service.generate_response(
                 payload.message,
                 context_chunks,

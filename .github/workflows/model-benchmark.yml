@@ -1,0 +1,156 @@
+name: Model benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment containing Azure defaults
+        required: true
+        default: dev
+        type: string
+      resource_group:
+        description: Azure resource group override
+        required: false
+        default: ''
+        type: string
+      ai_account_name:
+        description: Azure AI Foundry account override
+        required: false
+        default: ''
+        type: string
+      container_app_name:
+        description: Backend Container App override
+        required: false
+        default: ''
+        type: string
+      location:
+        description: Azure region override
+        required: false
+        default: ''
+        type: string
+      judge_deployment:
+        description: Independent evaluator deployment override
+        required: false
+        default: ''
+        type: string
+      judge_endpoint:
+        description: Evaluator Azure OpenAI endpoint override
+        required: false
+        default: ''
+        type: string
+      max_estimated_cost_usd:
+        description: Abort before paid calls when the conservative estimate exceeds this amount
+        required: true
+        default: '100'
+        type: string
+      deployment_capacity:
+        description: Requested realtime deployment capacity units (bounded by discovered SKU quota)
+        required: true
+        default: '10'
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: model-benchmark-${{ inputs.resource_group || vars.AZURE_RESOURCE_GROUP }}-${{ inputs.ai_account_name || vars.AZURE_AI_ACCOUNT_NAME }}
+  cancel-in-progress: false
+
+env:
+  AZURE_RESOURCE_GROUP: ${{ inputs.resource_group || vars.AZURE_RESOURCE_GROUP }}
+  AZURE_AI_ACCOUNT_NAME: ${{ inputs.ai_account_name || vars.AZURE_AI_ACCOUNT_NAME }}
+  AZURE_CONTAINER_APP_NAME: ${{ inputs.container_app_name || vars.AZURE_CONTAINER_APP_NAME }}
+  AZURE_LOCATION: ${{ inputs.location || vars.AZURE_LOCATION }}
+  AZURE_AI_JUDGE_DEPLOYMENT: ${{ inputs.judge_deployment || vars.AZURE_AI_JUDGE_DEPLOYMENT }}
+  AZURE_OPENAI_ENDPOINT: ${{ inputs.judge_endpoint || vars.AZURE_OPENAI_ENDPOINT }}
+  AZURE_AI_PROJECT_URL: ${{ vars.AZURE_AI_PROJECT_ENDPOINT }}
+  BENCHMARK_OUTPUT_DIR: evals/benchmark-results
+  BENCHMARK_REGISTRY: evals/benchmark-results/benchmark_resources.json
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: evals/requirements.txt
+
+      - name: Install benchmark dependencies
+        run: pip install -r evals/requirements.txt
+
+      - name: Install Container Apps CLI extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Validate configuration
+        shell: bash
+        run: |
+          missing=()
+          for name in AZURE_RESOURCE_GROUP AZURE_AI_ACCOUNT_NAME AZURE_CONTAINER_APP_NAME AZURE_LOCATION AZURE_AI_JUDGE_DEPLOYMENT; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing required GitHub environment variables or overrides: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Run cost-aware benchmark
+        run: |
+          python evals/model_benchmark.py run \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --ai-account "$AZURE_AI_ACCOUNT_NAME" \
+            --container-app "$AZURE_CONTAINER_APP_NAME" \
+            --location "$AZURE_LOCATION" \
+            --judge-deployment "$AZURE_AI_JUDGE_DEPLOYMENT" \
+            --judge-endpoint "$AZURE_OPENAI_ENDPOINT" \
+            --project-url "$AZURE_AI_PROJECT_URL" \
+            --run-id "${{ github.run_id }}-${{ github.run_attempt }}" \
+            --max-estimated-cost-usd "${{ inputs.max_estimated_cost_usd }}" \
+            --deployment-capacity "${{ inputs.deployment_capacity }}" \
+            --output-dir "$BENCHMARK_OUTPUT_DIR" \
+            --registry "$BENCHMARK_REGISTRY"
+
+      - name: Clean temporary benchmark resources
+        if: always()
+        run: |
+          python evals/model_benchmark.py cleanup \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --ai-account "$AZURE_AI_ACCOUNT_NAME" \
+            --container-app "$AZURE_CONTAINER_APP_NAME" \
+            --registry "$BENCHMARK_REGISTRY"
+
+      - name: Publish job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$BENCHMARK_OUTPUT_DIR/benchmark_report.md" ]; then
+            cat "$BENCHMARK_OUTPUT_DIR/benchmark_report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Azure AI model benchmark" >> "$GITHUB_STEP_SUMMARY"
+            echo "The benchmark stopped before it could create a report." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evals/benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30

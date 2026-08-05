@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1)
     conversation_id: str | None = None
+    include_evaluation_context: bool = False
 
     @field_validator("message")
     @classmethod
@@ -27,7 +28,7 @@ class ChatSource(BaseModel):
 
 
 class ChatEvent(BaseModel):
-    type: Literal["token", "sources", "done", "error"]
+    type: Literal["token", "context", "sources", "done", "error"]
     content: Any = None
 
 

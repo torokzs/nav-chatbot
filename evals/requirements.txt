@@ -2,3 +2,5 @@ azure-ai-evaluation
 azure-identity
 httpx
 python-dotenv
+pytest
+tiktoken

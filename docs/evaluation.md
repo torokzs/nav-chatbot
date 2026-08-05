@@ -80,6 +80,10 @@ A deployment pipeline részeként javasolt automatikus **Foundry Cloud Evaluatio
 3. a pipeline metrikákat hasonlít a küszöbökhöz,
 4. csak siker esetén történik forgalomterelés.
 
+A többmodelles, költség- és latency-összehasonlítást a külön, manuális
+[`Model benchmark`](model-benchmark.md) workflow végzi. Ez nem része a release
+traffic-shift folyamatnak.
+
 ## Quality gate
 
 A release csak akkor léphet tovább, ha minden kötelező küszöb teljesül.

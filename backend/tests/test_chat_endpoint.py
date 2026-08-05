@@ -95,6 +95,44 @@ async def test_chat_endpoint_streams_sse_events(mock_settings: Settings) -> None
 
 
 @pytest.mark.asyncio
+async def test_chat_endpoint_includes_context_only_when_requested(
+    mock_settings: Settings,
+) -> None:
+    _reset_sse_app_status()
+    app = create_app()
+    app.state.settings = mock_settings
+    app.state.retrieval_service = FakeRetrievalService()
+    app.state.llm_service = FakeLLMService()
+    app.dependency_overrides[get_settings] = lambda: mock_settings
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client, client.stream(
+        "POST",
+        "/api/chat",
+        json={
+            "message": "Mikor kell beadni az SZJA bevallást?",
+            "include_evaluation_context": True,
+        },
+    ) as response:
+        events = [
+            json.loads(line.removeprefix("data: "))
+            async for line in response.aiter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert [event["type"] for event in events] == [
+        "context",
+        "token",
+        "token",
+        "sources",
+        "done",
+    ]
+    assert events[0]["content"][0]["content"] == "Az SZJA bevallás határideje május 20."
+
+
+@pytest.mark.asyncio
 async def test_chat_endpoint_streams_error_event(mock_settings: Settings) -> None:
     _reset_sse_app_status()
     app = create_app()

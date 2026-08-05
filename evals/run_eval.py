@@ -6,11 +6,13 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
+import tiktoken
 from azure.ai.evaluation import (
     FluencyEvaluator,
     GroundednessEvaluator,
@@ -34,6 +36,20 @@ class ChatRunResult:
     question: str
     response: str
     sources: list[dict[str, Any]]
+    evaluation_context: list[dict[str, Any]]
+    ttft_seconds: float | None
+    total_latency_seconds: float
+    output_tokens: int
+    output_tokens_source: str
+
+    @property
+    def tokens_per_second(self) -> float | None:
+        if self.output_tokens <= 0 or self.ttft_seconds is None:
+            return None
+        generation_seconds = self.total_latency_seconds - self.ttft_seconds
+        if generation_seconds <= 0:
+            return None
+        return self.output_tokens / generation_seconds
 
 
 class EvaluationConfigurationError(RuntimeError):
@@ -51,19 +67,20 @@ class CitationCorrectnessEvaluator:
     ) -> dict[str, Any]:
         page = int(expected_page)
         parsed_sources = self._parse_sources(sources)
+        normalized_booklet = str(expected_fuzet).lstrip("0") or "0"
         matched_source = any(
-            str(item.get("fuzet_szam", "")) == str(expected_fuzet)
+            (str(item.get("fuzet_szam", "")).lstrip("0") or "0") == normalized_booklet
             and int(item.get("page_from", 0)) <= page <= int(item.get("page_to", item.get("page_from", 0)))
             for item in parsed_sources
         )
         matched_text = self._response_mentions_citation(response=response, expected_fuzet=str(expected_fuzet), expected_page=page)
-        score = 1.0 if matched_source or matched_text else 0.0
+        score = 1.0 if matched_source and matched_text else 0.0
         return {
             "citation_correctness": score,
             "citation_correctness_reason": (
-                "A várt füzet- és oldalhivatkozás megtalálható a források között vagy a válasz szövegében."
+                "A válasz és a backend forráslistája is tartalmazza a várt füzet- és oldalhivatkozást."
                 if score
-                else "A várt füzet- és oldalhivatkozás nem azonosítható."
+                else "A várt füzet- és oldalhivatkozás nem azonosítható egyszerre a válaszban és a forráslistában."
             ),
         }
 
@@ -85,10 +102,12 @@ class CitationCorrectnessEvaluator:
     def _response_mentions_citation(*, response: str, expected_fuzet: str, expected_page: int) -> bool:
         if not response:
             return False
+        booklet = expected_fuzet.lstrip("0") or "0"
+        booklet_pattern = rf"0*{re.escape(booklet)}" if booklet.isdigit() else re.escape(booklet)
         citation_patterns = [
-            rf"\[{re.escape(expected_fuzet)}[^\]]*{expected_page}(?:[^\d]|$)",
-            rf"{re.escape(expected_fuzet)}\s*[–,-]\s*[^\n]*{expected_page}\.\s*oldal",
-            rf"{re.escape(expected_fuzet)}[^\n]*{expected_page}-{expected_page}\.\s*oldal",
+            rf"\[{booklet_pattern}[^\]]*{expected_page}(?:[^\d]|$)",
+            rf"{booklet_pattern}\s*[–,-]\s*[^\n]*{expected_page}\.\s*oldal",
+            rf"{booklet_pattern}[^\n]*{expected_page}-{expected_page}\.\s*oldal",
         ]
         return any(re.search(pattern, response, flags=re.IGNORECASE) for pattern in citation_patterns)
 
@@ -166,9 +185,16 @@ def call_chat_endpoint(client: httpx.Client, endpoint: str, question: str) -> Ch
     url = build_chat_url(endpoint)
     response_text_parts: list[str] = []
     sources: list[dict[str, Any]] = []
+    evaluation_context: list[dict[str, Any]] = []
+    started = time.perf_counter()
+    first_token_at: float | None = None
 
     LOGGER.debug("Calling %s", url)
-    with client.stream("POST", url, json={"message": question}) as response:
+    with client.stream(
+        "POST",
+        url,
+        json={"message": question, "include_evaluation_context": True},
+    ) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line:
@@ -179,7 +205,11 @@ def call_chat_endpoint(client: httpx.Client, endpoint: str, question: str) -> Ch
             event_type = event.get("type")
             content = event.get("content")
             if event_type == "token" and isinstance(content, str):
+                if first_token_at is None:
+                    first_token_at = time.perf_counter()
                 response_text_parts.append(content)
+            elif event_type == "context" and isinstance(content, list):
+                evaluation_context = [item for item in content if isinstance(item, dict)]
             elif event_type == "sources" and isinstance(content, list):
                 sources = [item for item in content if isinstance(item, dict)]
             elif event_type == "error":
@@ -190,7 +220,18 @@ def call_chat_endpoint(client: httpx.Client, endpoint: str, question: str) -> Ch
     answer = "".join(response_text_parts).strip()
     if not answer:
         raise RuntimeError("The backend returned an empty answer.")
-    return ChatRunResult(question=question, response=answer, sources=sources)
+    completed = time.perf_counter()
+    output_tokens = len(tiktoken.get_encoding("cl100k_base").encode(answer))
+    return ChatRunResult(
+        question=question,
+        response=answer,
+        sources=sources,
+        evaluation_context=evaluation_context,
+        ttft_seconds=None if first_token_at is None else first_token_at - started,
+        total_latency_seconds=completed - started,
+        output_tokens=output_tokens,
+        output_tokens_source="cl100k_base estimate; backend SSE does not expose usage",
+    )
 
 
 
@@ -208,6 +249,18 @@ def sources_to_context(sources: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def evaluation_context_to_text(
+    context_chunks: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+) -> str:
+    content = [
+        str(chunk.get("content", "")).strip()
+        for chunk in context_chunks
+        if str(chunk.get("content", "")).strip()
+    ]
+    return "\n\n".join(content) if content else sources_to_context(sources)
+
+
 
 def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[dict[str, Any]]:
     timeout = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=30.0)
@@ -221,7 +274,10 @@ def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[d
                 {
                     "query": question,
                     "response": run_result.response,
-                    "context": sources_to_context(run_result.sources),
+                    "context": evaluation_context_to_text(
+                        run_result.evaluation_context,
+                        run_result.sources,
+                    ),
                     "ground_truth": row["expected_answer"],
                     "expected_fuzet": str(row["expected_fuzet"]),
                     "expected_page": int(row["expected_page"]),
@@ -287,7 +343,11 @@ def resolve_model_config() -> tuple[dict[str, str], Any]:
 
 
 
-def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
+def run_foundry_evaluation(
+    eval_input_path: Path,
+    *,
+    output_path: Path = EVAL_OUTPUT_FILE,
+) -> dict[str, Any]:
     model_config, evaluator_credential = resolve_model_config()
     azure_ai_project = resolve_azure_ai_project()
 
@@ -295,9 +355,11 @@ def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
     if evaluator_credential is not None:
         eval_kwargs["credential"] = evaluator_credential
 
-    # GPT-based evaluators require working LLM auth; build them but handle failures gracefully
     evaluators: dict[str, Any] = {
         "citation_correctness": CitationCorrectnessEvaluator(),
+        "groundedness": GroundednessEvaluator(model_config, **eval_kwargs),
+        "relevance": RelevanceEvaluator(model_config, **eval_kwargs),
+        "fluency": FluencyEvaluator(model_config, **eval_kwargs),
     }
     evaluator_config: dict[str, Any] = {
         "citation_correctness": {
@@ -308,30 +370,32 @@ def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
                 "sources": "${data.sources}",
             }
         },
+        "groundedness": {
+            "column_mapping": {
+                "query": "${data.query}",
+                "context": "${data.context}",
+                "response": "${data.response}",
+            }
+        },
+        "relevance": {
+            "column_mapping": {
+                "query": "${data.query}",
+                "response": "${data.response}",
+            }
+        },
+        "fluency": {
+            "column_mapping": {
+                "query": "${data.query}",
+                "response": "${data.response}",
+            }
+        },
     }
-
-    # Try to add GPT-based evaluators; skip if model_config fails validation
-    try:
-        evaluators["groundedness"] = GroundednessEvaluator(model_config, **eval_kwargs)
-        evaluators["relevance"] = RelevanceEvaluator(model_config, **eval_kwargs)
-        evaluators["fluency"] = FluencyEvaluator(model_config, **eval_kwargs)
-        evaluator_config["groundedness"] = {
-            "column_mapping": {"query": "${data.query}", "context": "${data.context}", "response": "${data.response}"}
-        }
-        evaluator_config["relevance"] = {
-            "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
-        }
-        evaluator_config["fluency"] = {
-            "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
-        }
-    except Exception as exc:
-        LOGGER.warning("GPT-based evaluators unavailable (auth issue): %s. Running citation_correctness only.", exc)
 
     kwargs: dict[str, Any] = {
         "data": str(eval_input_path),
         "evaluators": evaluators,
         "evaluator_config": evaluator_config,
-        "output_path": str(EVAL_OUTPUT_FILE),
+        "output_path": str(output_path),
     }
     # Cloud logging requires a Foundry project; skip if not configured
     if azure_ai_project is not None:
@@ -422,16 +486,6 @@ def main() -> int:
         "citation_correctness": extract_metric(metrics, "citation_correctness"),
     }
     passed = print_summary(summary, threshold_module)
-
-    # Report optional GPT-based metrics (informational, not gating)
-    optional_thresholds = getattr(threshold_module, "OPTIONAL_THRESHOLDS", {})
-    if optional_thresholds:
-        print("Optional metrics (informational):")
-        for metric_name, threshold in optional_thresholds.items():
-            value = summary.get(metric_name)
-            value_label = "n/a" if value is None else f"{value:.3f}"
-            status = "PASS" if value is not None and float(value) >= float(threshold) else "INFO"
-            print(f" - {metric_name}: {value_label} (target: {threshold:.3f}) => {status}")
 
     studio_url = result.get("studio_url") if isinstance(result, dict) else None
     if studio_url:
