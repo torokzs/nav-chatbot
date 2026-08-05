@@ -1,9 +1,6 @@
 name: Deploy
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       environment:
@@ -14,6 +11,11 @@ on:
       run_full_eval:
         description: Run the full 100-question evaluation suite
         required: false
+        default: false
+        type: boolean
+      indexes_ready:
+        description: Confirm that the 2021-2026 Fabric ingestion and shared AI Search index rebuild completed
+        required: true
         default: false
         type: boolean
 
@@ -32,7 +34,17 @@ env:
   AZURE_RESOURCE_GROUP: nav-chatbot-rg
 
 jobs:
+  validate-release-inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require multi-year indexes
+        if: inputs.indexes_ready != true
+        run: |
+          echo "Run the Fabric 2021-2026 ingestion and shared AI Search index rebuild before deployment."
+          exit 1
+
   build-gate:
+    needs: validate-release-inputs
     uses: ./.github/workflows/build.yml
 
   provision:
