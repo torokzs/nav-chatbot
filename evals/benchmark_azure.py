@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import os
+import shutil
 import subprocess
 import time
 import urllib.parse
@@ -25,7 +27,12 @@ def run_az(
     output_json: bool = True,
     check: bool = True,
 ) -> Any:
-    command = ["az", *args, "--only-show-errors"]
+    executable = shutil.which("az.cmd" if os.name == "nt" else "az")
+    if executable is None:
+        executable = shutil.which("az")
+    if executable is None:
+        raise AzureCommandError("Azure CLI executable was not found on PATH.")
+    command = [executable, *args, "--only-show-errors"]
     if output_json:
         command.extend(["--output", "json"])
     LOGGER.info("Running Azure CLI: az %s", " ".join(args))

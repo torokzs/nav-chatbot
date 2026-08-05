@@ -48,6 +48,11 @@ on:
         required: true
         default: '10'
         type: string
+      base_revision:
+        description: Optional healthy zero-traffic backend revision to benchmark
+        required: false
+        default: ''
+        type: string
 
 permissions:
   id-token: write
@@ -123,6 +128,7 @@ jobs:
             --run-id "${{ github.run_id }}-${{ github.run_attempt }}" \
             --max-estimated-cost-usd "${{ inputs.max_estimated_cost_usd }}" \
             --deployment-capacity "${{ inputs.deployment_capacity }}" \
+            --base-revision "${{ inputs.base_revision }}" \
             --output-dir "$BENCHMARK_OUTPUT_DIR" \
             --registry "$BENCHMARK_REGISTRY"
 

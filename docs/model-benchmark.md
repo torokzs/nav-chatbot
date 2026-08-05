@@ -91,6 +91,14 @@ megköveteli, hogy a produkciós ingress explicit revízióra mutasson.
 mert az új benchmark-revízió különben éles forgalmat kaphatna. A benchmark
 soha nem ír át traffic weightet.
 
+Az operátori ellenőrzéshez a `--preflight-only` kapcsoló a teljes modell-,
+SKU-, quota- és Retail Price felderítést, valamint a költségkaput lefuttatja,
+de nem hoz létre deploymentet és nem indít fizetős modellhívást.
+
+PR előtti méréshez a `base_revision` inputtal megadható egy előzőleg
+deployolt, egészséges, 0%-os forgalmú branch-revízió. Így a benchmark a friss
+backend-kódot méri, miközben a produkciós traffic rule változatlan marad.
+
 ## Metrikák és rangsorolás
 
 Kérdésenként rögzül a válasz, a forráslista, a hiba, TTFT, teljes latency,

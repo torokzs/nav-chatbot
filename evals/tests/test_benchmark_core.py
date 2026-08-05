@@ -58,6 +58,18 @@ def test_shortlist_fills_required_family_slots_with_unique_models() -> None:
     assert shortlist[2].candidate and shortlist[2].candidate.name == "gpt-5-nano"
 
 
+def test_frontier_slot_falls_back_to_highest_priority_known_price() -> None:
+    unknown_frontier = candidate("gpt-5.6-sol", "openai")
+    unknown_frontier.price = None
+    known_frontier = candidate("gpt-5.2", "openai", input_price=1.75, output_price=14)
+    newer_mini = candidate("gpt-5.4-mini", "openai", input_price=0.75, output_price=4.5)
+
+    shortlist = build_shortlist([unknown_frontier, known_frontier, newer_mini])
+
+    assert shortlist[0].candidate is not None
+    assert shortlist[0].candidate.name == "gpt-5.2"
+
+
 def test_shortlist_documents_unavailable_family_as_skipped() -> None:
     shortlist = build_shortlist([candidate("gpt-5", "openai")])
 

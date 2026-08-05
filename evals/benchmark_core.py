@@ -26,6 +26,11 @@ SLOT_SPECS = (
 
 FRONTIER_PRIORITY = {
     "openai": (
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4",
         "gpt-5.2",
         "gpt-5.1",
         "gpt-5",
@@ -34,6 +39,10 @@ FRONTIER_PRIORITY = {
         "gpt-4o",
     ),
     "claude": (
+        "claude-opus-5",
+        "claude-opus-4.8",
+        "claude-opus-4.7",
+        "claude-opus-4.6",
         "claude-opus-4.1",
         "claude-opus-4",
         "claude-sonnet-4.5",
@@ -44,6 +53,8 @@ FRONTIER_PRIORITY = {
 
 EFFICIENCY_PRIORITY = {
     "openai": (
+        "gpt-5.4-nano",
+        "gpt-5.4-mini",
         "gpt-5-nano",
         "gpt-5-mini",
         "gpt-4.1-nano",
@@ -51,6 +62,7 @@ EFFICIENCY_PRIORITY = {
         "gpt-4o-mini",
     ),
     "claude": (
+        "claude-haiku-4-5",
         "claude-haiku",
         "claude-3-5-haiku",
         "claude-sonnet",
@@ -62,7 +74,9 @@ EFFICIENCY_PRIORITY = {
         "mistral-large",
     ),
     "deepseek": (
-        "deepseek-v3",
+        "deepseek-v3.2",
+        "deepseek-v3.1",
+        "deepseek-v3-0324",
         "deepseek-r1",
         "deepseek",
     ),
@@ -204,9 +218,8 @@ def _available_skus(
         capacity = sku.get("capacity")
         capacity_map = capacity if isinstance(capacity, Mapping) else {}
         minimum = float(capacity_map.get("minimum", 1))
-        default = float(capacity_map.get("default", minimum))
         step = max(float(capacity_map.get("step", 1)), 1)
-        desired = max(float(requested_capacity), minimum, default)
+        desired = max(float(requested_capacity), minimum)
         if maximum is not None:
             desired = min(desired, maximum)
         units = minimum + math.ceil(max(desired - minimum, 0) / step) * step
@@ -279,7 +292,13 @@ def _candidate_order(candidate: ModelCandidate, tier: str) -> tuple[Any, ...]:
     sku_priority = sku_order.get(_compact(candidate.sku), 10)
     if tier == "frontier":
         priorities = FRONTIER_PRIORITY.get(candidate.family, ())
+        efficient_variant = any(
+            marker in _normalized(candidate.name)
+            for marker in ("mini", "nano", "haiku", "small")
+        )
         return (
+            candidate.price is None,
+            efficient_variant,
             _priority_index(candidate.name, priorities),
             tuple(-part for part in _version_key(candidate.version)),
             sku_priority,

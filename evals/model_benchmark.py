@@ -94,6 +94,16 @@ def parse_args() -> argparse.Namespace:
     run_parser.add_argument("--max-estimated-cost-usd", type=float, default=100.0)
     run_parser.add_argument("--deployment-capacity", type=int, default=10)
     run_parser.add_argument("--requests-per-minute", type=int, default=25)
+    run_parser.add_argument(
+        "--base-revision",
+        default=os.getenv("AZURE_CONTAINER_APP_BASE_REVISION"),
+        help="Optional healthy zero-traffic branch revision to copy instead of production.",
+    )
+    run_parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Discover candidates and evaluate the cost gate without creating paid resources.",
+    )
     run_parser.add_argument("--input-tokens-per-question", type=int, default=8_000)
     run_parser.add_argument("--output-tokens-per-question", type=int, default=1_000)
     run_parser.add_argument("--judge-input-tokens-per-evaluation", type=int, default=10_000)
@@ -113,10 +123,15 @@ def _model_details(deployment: dict[str, Any]) -> tuple[str, str, str]:
     properties = deployment.get("properties", {})
     model = properties.get("model", {}) if isinstance(properties, dict) else {}
     sku = deployment.get("sku", {})
+    scale_settings = (
+        properties.get("scaleSettings", {})
+        if isinstance(properties, dict)
+        else {}
+    )
     return (
         str(model.get("name", "")),
         str(model.get("version", "")),
-        str(sku.get("name", "")),
+        str(sku.get("name", "") or scale_settings.get("scaleType", "")),
     )
 
 
@@ -516,6 +531,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
             "resource_group": args.resource_group,
             "ai_account": args.ai_account,
             "container_app": args.container_app,
+            "base_revision": args.base_revision,
             "location": args.location,
             "judge_deployment": args.judge_deployment,
             "deployment_capacity": args.deployment_capacity,
@@ -548,36 +564,86 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
         app = run_az(
             [
-                "containerapp",
+                "resource",
                 "show",
                 "--resource-group",
                 args.resource_group,
                 "--name",
                 args.container_app,
+                "--resource-type",
+                "Microsoft.App/containerApps",
+                "--api-version",
+                "2024-03-01",
             ]
         )
-        base_revision, _ = validate_traffic_isolation(app)
-        raw_models = run_az(
+        production_revision, _ = validate_traffic_isolation(app)
+        subscription_id = str(
+            run_az(["account", "show"]).get("id", "")
+        )
+        if not subscription_id:
+            raise AzureCommandError("Azure subscription ID could not be resolved.")
+        base_revision = production_revision
+        if args.base_revision:
+            revision_url = (
+                f"https://management.azure.com/subscriptions/{subscription_id}"
+                f"/resourceGroups/{args.resource_group}"
+                "/providers/Microsoft.App/containerApps"
+                f"/{args.container_app}/revisions/{args.base_revision}"
+                "?api-version=2024-03-01"
+            )
+            revision_response = run_az(
+                ["rest", "--method", "get", "--url", revision_url]
+            )
+            revision_properties = (
+                revision_response.get("properties", {})
+                if isinstance(revision_response, dict)
+                else {}
+            )
+            health = str(revision_properties.get("healthState", "")).lower()
+            running = str(revision_properties.get("runningState", "")).lower()
+            if health != "healthy" or running != "running":
+                raise AzureCommandError(
+                    f"Base revision {args.base_revision} is not healthy and running."
+                )
+            base_revision = args.base_revision
+        report["config"]["base_revision"] = base_revision
+        catalog_url = (
+            f"https://management.azure.com/subscriptions/{subscription_id}"
+            f"/providers/Microsoft.CognitiveServices/locations/{args.location}"
+            "/models?api-version=2024-10-01"
+        )
+        catalog_response = run_az(
             [
-                "cognitiveservices",
-                "account",
-                "list-models",
-                "--resource-group",
-                args.resource_group,
-                "--name",
-                args.ai_account,
+                "rest",
+                "--method",
+                "get",
+                "--url",
+                catalog_url,
             ]
         )
-        usage = run_az(
+        usage_url = (
+            f"https://management.azure.com/subscriptions/{subscription_id}"
+            f"/providers/Microsoft.CognitiveServices/locations/{args.location}"
+            "/usages?api-version=2024-10-01"
+        )
+        usage_response = run_az(
             [
-                "cognitiveservices",
-                "account",
-                "list-usage",
-                "--resource-group",
-                args.resource_group,
-                "--name",
-                args.ai_account,
+                "rest",
+                "--method",
+                "get",
+                "--url",
+                usage_url,
             ]
+        )
+        raw_models = (
+            catalog_response.get("value", [])
+            if isinstance(catalog_response, dict)
+            else []
+        )
+        usage = (
+            usage_response.get("value", [])
+            if isinstance(usage_response, dict)
+            else []
         )
         if not isinstance(raw_models, list):
             raise AzureCommandError("Model discovery did not return a list.")
@@ -715,6 +781,10 @@ def run_benchmark(args: argparse.Namespace) -> int:
         if decision != "approved":
             report["status"] = decision
             exit_code = 2
+            return exit_code
+        if args.preflight_only:
+            report["status"] = "preflight_approved"
+            exit_code = 0
             return exit_code
 
         account = run_az(
