@@ -25,6 +25,9 @@ param backendImageName string = 'backend'
 @description('Backend container image tag.')
 param backendImageTag string = 'latest'
 
+@description('Backend container image used during initial provisioning before azd builds the application image.')
+param backendBootstrapImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
 @description('Optional existing stable Container App revision name. When supplied, the latest revision is deployed with 0% traffic for blue/green promotion workflows.')
 param backendStableRevisionName string = ''
 
@@ -131,7 +134,7 @@ module containerApps './modules/container-apps.bicep' = if (deployHosting) {
       'azd-service-name': 'backend'
     })
     containerRegistryLoginServer: deployHosting ? containerRegistry.outputs.loginServer : ''
-    backendContainerImage: deployHosting ? '${containerRegistry.outputs.loginServer}/${backendImageName}:${backendImageTag}' : ''
+    backendContainerImage: backendBootstrapImage
     stableRevisionName: backendStableRevisionName
     envVars: {
       aiSearchEndpoint: aiSearch.outputs.endpoint
