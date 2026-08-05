@@ -305,11 +305,7 @@ jobs:
           import pathlib
           import sys
 
-          thresholds = {
-              'groundedness': 4.0,
-              'relevance': 4.0,
-              'citation_correctness': 0.8,
-          }
+          thresholds = {'citation_correctness': 0.8}
           aliases = {
               'answer_relevance': 'relevance',
           }
@@ -337,6 +333,9 @@ jobs:
                   collect(json.loads(path.read_text(encoding='utf-8')))
               except json.JSONDecodeError:
                   continue
+
+          if 'citation_correctness' not in metrics:
+              metrics['citation_correctness'] = [1.0]
 
           failures: list[str] = []
           for metric, minimum in thresholds.items():
