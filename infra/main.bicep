@@ -121,6 +121,7 @@ module keyVault './modules/key-vault.bicep' = {
     aiFoundryEndpoint: aiFoundry.outputs.endpoint
     docIntelligenceEndpoint: docIntelligence.outputs.endpoint
     appInsightsConnectionString: appInsights.outputs.connectionString
+    frontendOrigin: deployHosting ? staticWebApp.outputs.url : ''
   }
 }
 

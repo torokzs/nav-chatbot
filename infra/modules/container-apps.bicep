@@ -126,6 +126,10 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: contains(envVars, 'appInsightsConnectionString') ? envVars.appInsightsConnectionString : ''
             }
+            {
+              name: 'FRONTEND_ORIGIN'
+              value: contains(envVars, 'frontendOrigin') ? envVars.frontendOrigin : 'http://localhost:3000'
+            }
           ]
           resources: {
             cpu: json('0.5')
