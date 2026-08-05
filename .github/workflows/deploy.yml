@@ -80,6 +80,8 @@ jobs:
           if [ -n "$BACKEND_APP_NAME" ]; then
             STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
             azd env set BACKEND_STABLE_REVISION_NAME "$STABLE_REVISION"
+          else
+            azd env set BACKEND_STABLE_REVISION_NAME ""
           fi
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -133,6 +135,8 @@ jobs:
           if [ -n "$BACKEND_APP_NAME" ]; then
             STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
             azd env set BACKEND_STABLE_REVISION_NAME "$STABLE_REVISION"
+          else
+            azd env set BACKEND_STABLE_REVISION_NAME ""
           fi
 
       - name: Deploy application
