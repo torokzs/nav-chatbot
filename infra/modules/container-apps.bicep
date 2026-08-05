@@ -82,6 +82,12 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: containerAppsEnvironment.id
     configuration: {
       activeRevisionsMode: 'Multiple'
+      registries: empty(containerRegistryLoginServer) ? [] : [
+        {
+          server: containerRegistryLoginServer
+          identity: 'system'
+        }
+      ]
       ingress: {
         external: true
         targetPort: 80
