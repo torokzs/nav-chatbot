@@ -141,12 +141,21 @@ jobs:
             azd env set BACKEND_STABLE_REVISION_NAME ""
           fi
 
+      - name: Resolve backend URL
+        id: backend_metadata
+        shell: bash
+        run: |
+          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv)
+          BACKEND_FQDN=$(az resource show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --resource-type Microsoft.App/containerApps --api-version 2024-03-01 --query properties.configuration.ingress.fqdn -o tsv)
+          echo "backend_url=https://$BACKEND_FQDN" >> "$GITHUB_OUTPUT"
+
       - name: Deploy application
         run: azd deploy --no-prompt
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          VITE_API_BASE_URL: ${{ steps.backend_metadata.outputs.backend_url }}
 
       - name: Capture deployment metadata
         id: deploy_metadata
