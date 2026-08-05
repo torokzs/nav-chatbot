@@ -173,6 +173,8 @@ jobs:
   integration-tests:
     runs-on: ubuntu-latest
     needs: deploy
+    outputs:
+      backend_url: ${{ needs.deploy.outputs.backend_url }}
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
     steps:
       - name: Checkout
@@ -219,7 +221,7 @@ jobs:
       - name: Run smoke evaluation
         run: python evals/run_eval.py --endpoint "$BACKEND_URL" --smoke
         env:
-          BACKEND_URL: ${{ needs.deploy.outputs.backend_url }}
+          BACKEND_URL: ${{ needs.integration-tests.outputs.backend_url }}
           AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -256,7 +258,7 @@ jobs:
       - name: Run full evaluation
         run: python evals/run_eval.py --endpoint "$BACKEND_URL"
         env:
-          BACKEND_URL: ${{ needs.deploy.outputs.backend_url }}
+          BACKEND_URL: ${{ needs.integration-tests.outputs.backend_url }}
 
       - name: Upload full eval results
         if: always()
