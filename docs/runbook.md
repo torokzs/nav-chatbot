@@ -30,7 +30,7 @@ A notebook-futási felhasználónak (user principal) az alábbi RBAC szerepkör�
 
 - **Document Intelligence és Embedding**: `mssparkutils.credentials.getToken("https://cognitiveservices.azure.com")` — működik
 - **AI Search**: `mssparkutils.credentials.getToken("https://search.azure.com")` **NEM működik** (HTTP 500). Workaround: **Search Admin Key** használata env változóból
-- **Fájlok olvasása**: `mssparkutils.fs.head()` bináris fájlokra korrumpál! Helyette: `/lakehouse/default/Files/raw/2026/` filesystem mount Python `open()`-nal
+- **Fájlok olvasása**: `mssparkutils.fs.head()` bináris fájlokra korrumpál! Helyette: `/lakehouse/default/Files/raw/<adoev>/` filesystem mount Python `open()`-nal
 
 ### Rate limitek
 
@@ -85,7 +85,7 @@ Az ingest/index pipeline ajánlott futási sorrendje:
 
 Ajánlott ellenőrzési pontok:
 
-- `01` után: a PDF-ek megjelentek a `Files/raw/2026/` alatt
+- `01` után: a PDF-ek megjelentek a `Files/raw/2021/`–`Files/raw/2026/` alatt
 - `02` után: létrejött `nav_chunks` és `nav_documents` Delta tábla
 - `03` után: az AI Search indexek és synonym map frissültek
 - `04` után: létrejött az `eval_results` tábla és van összesített metrika
@@ -289,3 +289,13 @@ az containerapp update \
 4. smoke eval
 5. teljes eval
 6. szükség esetén canary rollout, majd traffic shift
+
+### Többéves kiadás
+
+1. Futtasd az `01` és `02` notebookot külön-külön minden támogatott évre a `TAX_YEAR=2021`–`2026` paraméterrel.
+2. Ellenőrizd, hogy minden Delta sor rendelkezik `adoev` mezővel, és nincs ismétlődő `document_id` vagy `chunk_id`.
+3. Futtasd a `03` indexelést a közös Delta táblákra.
+4. Futtasd a backend/frontend unit teszteket, az integration smoke-ot és a többéves evalt.
+5. A PR megnyitása és minden új push automatikusan elindítja a `test` deploymentet.
+6. A workflow buildet, provisionálást, deployt, integration smoke-ot és LLM evalt futtat.
+7. A PR csak a teljes quality gate sikeres futása után merge-elhető; production deployment ebben a fázisban nincs.

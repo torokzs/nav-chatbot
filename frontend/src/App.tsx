@@ -3,11 +3,21 @@ import ChatWindow from './components/ChatWindow';
 import Footer from './components/Footer';
 import Header from './components/Header';
 import InputBar from './components/InputBar';
+import TaxYearSelector from './components/TaxYearSelector';
 import { useChat } from './hooks/useChat';
 import { colors, spacing } from './styles/theme';
 
 const App = () => {
-  const { error, isLoading, messages, sendMessage } = useChat();
+  const {
+    awaitingTaxYear,
+    error,
+    isLoading,
+    messages,
+    selectedTaxYear,
+    selectTaxYear,
+    sendMessage,
+    setSelectedTaxYear,
+  } = useChat();
 
   const appStyles = useMemo(
     () => ({
@@ -36,7 +46,13 @@ const App = () => {
     <div style={appStyles}>
       <Header />
       <main id="main-content" style={mainStyles}>
-        <ChatWindow messages={messages} isLoading={isLoading} />
+        <TaxYearSelector value={selectedTaxYear} onChange={setSelectedTaxYear} />
+        <ChatWindow
+          messages={messages}
+          isLoading={isLoading}
+          awaitingTaxYear={awaitingTaxYear}
+          onSelectTaxYear={selectTaxYear}
+        />
         <InputBar isLoading={isLoading} onSend={sendMessage} />
         {error ? (
           <p role="alert" style={{ color: colors.error, margin: 0 }}>

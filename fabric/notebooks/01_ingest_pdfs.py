@@ -1,6 +1,6 @@
 # METADATA ----------
 # title: 01 - Ingest NAV PDFs to Lakehouse
-# description: Uploads NAV 2026 information booklet PDFs to Lakehouse Files/raw/2026/
+# description: Uploads NAV 2021-2026 information booklet PDFs to Lakehouse Files/raw/<year>/
 
 # COMMAND ----------
 
@@ -20,7 +20,10 @@ except ImportError:
 
 
 SOURCE_PATH = os.getenv("SOURCE_PATH", "")
-TARGET_RELATIVE_PATH = os.getenv("TARGET_RELATIVE_PATH", "raw/2026")
+TAX_YEAR = int(os.getenv("TAX_YEAR", "2026"))
+if TAX_YEAR not in range(2021, 2027):
+    raise ValueError("TAX_YEAR must be between 2021 and 2026.")
+TARGET_RELATIVE_PATH = os.getenv("TARGET_RELATIVE_PATH", f"raw/{TAX_YEAR}")
 LOCAL_DATA_FALLBACK = os.getenv(
     "LOCAL_DATA_FALLBACK",
     r"C:\Users\jator\source\repos\navchatbotprod\data",
@@ -119,8 +122,8 @@ def copy_lakehouse_pdfs(source_dir: str, target_path: str, existing_names: set[s
 def resolve_source_path() -> str:
     candidates: Iterable[str] = (
         SOURCE_PATH,
-        files_path("incoming/2026"),
-        files_path("source/2026"),
+        files_path(f"incoming/{TAX_YEAR}"),
+        files_path(f"source/{TAX_YEAR}"),
         LOCAL_DATA_FALLBACK,
     )
 
@@ -164,7 +167,7 @@ print(f"Current total PDFs in {TARGET_PATH}: {current_total}")
 # COMMAND ----------
 
 print("Alternative upload options:")
-print("1. Manual: open the Lakehouse in Fabric and upload the PDFs into Files/raw/2026/.")
+print(f"1. Manual: open the Lakehouse in Fabric and upload the PDFs into Files/raw/{TAX_YEAR}/.")
 print("2. REST/API example: PUT the file to the Lakehouse Files endpoint or OneLake DFS path, then rerun this notebook.")
-print("   Example target pattern: https://onelake.dfs.fabric.microsoft.com/<workspace>/<lakehouse>/Files/raw/2026/<file>.pdf")
+print(f"   Example target pattern: https://onelake.dfs.fabric.microsoft.com/<workspace>/<lakehouse>/Files/raw/{TAX_YEAR}/<file>.pdf")
 print("3. Attached source: mount or attach the source folder, then set SOURCE_PATH to that folder and rerun the notebook.")

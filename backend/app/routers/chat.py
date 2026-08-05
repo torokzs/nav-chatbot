@@ -36,10 +36,12 @@ def _to_sse_message(event: ChatEvent) -> dict[str, str]:
     }
 
 
-@router.get("/api/documents/{fuzet_szam}/pdf")
-async def get_document_pdf(fuzet_szam: str) -> FileResponse:
+@router.get("/api/documents/{adoev}/{fuzet_szam}/pdf")
+async def get_document_pdf(adoev: int, fuzet_szam: str) -> FileResponse:
     """Serve a NAV booklet PDF by its number."""
-    for pdf_file in DATA_DIR.glob("*.pdf"):
+    year_directory = DATA_DIR / str(adoev)
+    search_directory = year_directory if year_directory.is_dir() else DATA_DIR
+    for pdf_file in search_directory.glob("*.pdf"):
         if re.match(rf"^0*{re.escape(fuzet_szam)}_", pdf_file.name) or pdf_file.name.startswith(
             f"{fuzet_szam}_"
         ):
@@ -48,7 +50,10 @@ async def get_document_pdf(fuzet_szam: str) -> FileResponse:
                 media_type="application/pdf",
                 filename=pdf_file.name,
             )
-    raise HTTPException(status_code=404, detail=f"PDF not found for booklet {fuzet_szam}")
+    raise HTTPException(
+        status_code=404,
+        detail=f"PDF not found for tax year {adoev}, booklet {fuzet_szam}",
+    )
 
 
 @router.post("/api/chat", response_class=EventSourceResponse)
@@ -64,6 +69,7 @@ async def stream_chat(
             context_chunks, source_documents = await retrieval_service.retrieve(
                 payload.message,
                 rewritten_queries,
+                payload.adoev,
             )
 
             if payload.include_evaluation_context:

@@ -42,4 +42,12 @@ describe('ChatWindow', () => {
 
     expect(scrollIntoView).toHaveBeenCalledTimes(2);
   });
+
+  it('renders tax-year choice buttons when a question is pending', () => {
+    render(<ChatWindow messages={[]} awaitingTaxYear />);
+
+    expect(screen.getByText('Melyik adóévre vonatkozik a kérdés?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '2021' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '2026' })).toBeInTheDocument();
+  });
 });

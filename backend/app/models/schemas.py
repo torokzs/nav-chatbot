@@ -1,12 +1,16 @@
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+SUPPORTED_TAX_YEARS = tuple(range(2021, 2027))
+TaxYear: TypeAlias = Literal[2021, 2022, 2023, 2024, 2025, 2026]
 
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     message: str = Field(min_length=1)
+    adoev: TaxYear
     conversation_id: str | None = None
     include_evaluation_context: bool = False
 
@@ -19,6 +23,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatSource(BaseModel):
+    adoev: TaxYear
     fuzet_szam: str
     fuzet_cim: str
     page_from: int
@@ -39,6 +44,7 @@ class ChunkResult(BaseModel):
 
 
 class DocumentResult(BaseModel):
+    adoev: TaxYear
     fuzet_szam: str
     fuzet_cim: str
     score: float

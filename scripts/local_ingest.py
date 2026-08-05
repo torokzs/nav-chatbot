@@ -158,6 +158,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", default="../data", help="Directory containing PDF files (default: ../data)")
     parser.add_argument("--max-pdfs", type=int, default=None, help="Process at most N PDFs")
     parser.add_argument(
+        "--tax-year",
+        type=int,
+        choices=range(2021, 2027),
+        default=2026,
+        help="Tax year assigned to every ingested PDF (default: 2026)",
+    )
+    parser.add_argument(
         "--skip-existing",
         action="store_true",
         help="Skip PDFs whose booklet id already has chunk documents in Azure AI Search",
@@ -307,6 +314,7 @@ def build_vector_search() -> VectorSearch:
 def build_chunk_index() -> SearchIndex:
     fields = [
         SimpleField(name="chunk_id", type=SearchFieldDataType.String, key=True, filterable=True),
+        SimpleField(name="adoev", type=SearchFieldDataType.Int32, filterable=True, facetable=True),
         SimpleField(name="fuzet_szam", type=SearchFieldDataType.String, filterable=True, facetable=True),
         SearchableField(name="fuzet_cim", analyzer_name="hu.microsoft"),
         SearchableField(
@@ -366,7 +374,9 @@ def build_chunk_index() -> SearchIndex:
 
 def build_document_index() -> SearchIndex:
     fields = [
-        SimpleField(name="fuzet_szam", type=SearchFieldDataType.String, key=True, filterable=True, facetable=True),
+        SimpleField(name="document_id", type=SearchFieldDataType.String, key=True, filterable=True),
+        SimpleField(name="adoev", type=SearchFieldDataType.Int32, filterable=True, facetable=True),
+        SimpleField(name="fuzet_szam", type=SearchFieldDataType.String, filterable=True, facetable=True),
         SearchableField(
             name="fuzet_cim",
             analyzer_name="hu.microsoft",
@@ -554,14 +564,15 @@ def extract_ordered_elements(result: Any) -> list[OrderedElement]:
     return sorted(ordered, key=lambda item: (item.page_from, item.order, 0 if item.kind == "paragraph" else 1))
 
 
-def build_chunk_id(file_name: str, breadcrumb: str, page_from: int, page_to: int, content_type: str, content: str) -> str:
-    seed = f"{file_name}|{breadcrumb}|{page_from}|{page_to}|{content_type}|{content}"
+def build_chunk_id(adoev: int, file_name: str, breadcrumb: str, page_from: int, page_to: int, content_type: str, content: str) -> str:
+    seed = f"{adoev}|{file_name}|{breadcrumb}|{page_from}|{page_to}|{content_type}|{content}"
     return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
 
 def build_chunk_payload(
     *,
     file_name: str,
+    adoev: int,
     fuzet_szam: str,
     fuzet_cim: str,
     kozzeteve: str | None,
@@ -573,7 +584,8 @@ def build_chunk_payload(
 ) -> dict[str, Any]:
     references = sorted(set(REFERENCE_PATTERN.findall(content)))
     return {
-        "chunk_id": build_chunk_id(file_name, breadcrumb, page_from, page_to, content_type, content),
+        "chunk_id": build_chunk_id(adoev, file_name, breadcrumb, page_from, page_to, content_type, content),
+        "adoev": adoev,
         "fuzet_szam": fuzet_szam,
         "fuzet_cim": fuzet_cim,
         "breadcrumb": breadcrumb,
@@ -590,6 +602,7 @@ def chunk_sentence_entries(
     entries: list[dict[str, Any]],
     *,
     file_name: str,
+    adoev: int,
     fuzet_szam: str,
     fuzet_cim: str,
     kozzeteve: str | None,
@@ -604,6 +617,7 @@ def chunk_sentence_entries(
         pages = [item["page"] for item in items]
         return build_chunk_payload(
             file_name=file_name,
+            adoev=adoev,
             fuzet_szam=fuzet_szam,
             fuzet_cim=fuzet_cim,
             kozzeteve=kozzeteve,
@@ -636,7 +650,9 @@ def chunk_sentence_entries(
     return chunks
 
 
-def build_chunks_for_document(file_name: str, result: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def build_chunks_for_document(
+    file_name: str, result: Any, adoev: int
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     ordered_elements = extract_ordered_elements(result)
     if not ordered_elements:
         raise PDFProcessingError("No paragraphs or tables were extracted from the PDF")
@@ -661,6 +677,7 @@ def build_chunks_for_document(file_name: str, result: Any) -> tuple[list[dict[st
             chunk_sentence_entries(
                 sentence_entries,
                 file_name=file_name,
+                adoev=adoev,
                 fuzet_szam=fuzet_szam,
                 fuzet_cim=fuzet_cim,
                 kozzeteve=kozzeteve,
@@ -685,6 +702,7 @@ def build_chunks_for_document(file_name: str, result: Any) -> tuple[list[dict[st
             chunks.append(
                 build_chunk_payload(
                     file_name=file_name,
+                    adoev=adoev,
                     fuzet_szam=fuzet_szam,
                     fuzet_cim=fuzet_cim,
                     kozzeteve=kozzeteve,
@@ -707,6 +725,8 @@ def build_chunks_for_document(file_name: str, result: Any) -> tuple[list[dict[st
 
     combined_content = "\n\n".join(chunk["content"] for chunk in chunks)
     document = {
+        "document_id": f"{adoev}-{fuzet_szam}",
+        "adoev": adoev,
         "fuzet_szam": fuzet_szam,
         "fuzet_cim": fuzet_cim,
         "kozzeteve": kozzeteve,
@@ -835,8 +855,10 @@ def search_escaped(value: str) -> str:
     return value.replace("'", "''")
 
 
-def booklet_exists(chunk_client: SearchClient, fuzet_szam: str) -> bool:
-    filter_expression = f"fuzet_szam eq '{search_escaped(fuzet_szam)}'"
+def booklet_exists(chunk_client: SearchClient, fuzet_szam: str, adoev: int) -> bool:
+    filter_expression = (
+        f"adoev eq {adoev} and fuzet_szam eq '{search_escaped(fuzet_szam)}'"
+    )
     results = retryable(
         f"check existing booklet {fuzet_szam}",
         lambda: chunk_client.search(search_text="*", filter=filter_expression, top=1, select=["chunk_id"]),
@@ -859,9 +881,10 @@ def process_pdf(
     clients: AzureClients,
     settings: Settings,
     skip_summary: bool,
+    adoev: int,
 ) -> tuple[int, dict[str, Any]]:
     result = analyze_pdf(clients.doc_client, pdf_path)
-    chunks, document = build_chunks_for_document(pdf_path.name, result)
+    chunks, document = build_chunks_for_document(pdf_path.name, result, adoev)
     if not chunks:
         raise PDFProcessingError("No chunks were created")
     chunk_docs = enrich_chunk_documents(
@@ -901,7 +924,9 @@ def main() -> int:
     try:
         for pdf_path in tqdm(pdf_paths, desc="PDFs"):
             fuzet_szam = extract_fuzet_szam(pdf_path.name)
-            if args.skip_existing and booklet_exists(clients.chunk_client, fuzet_szam):
+            if args.skip_existing and booklet_exists(
+                clients.chunk_client, fuzet_szam, args.tax_year
+            ):
                 logger.info("Skipping %s because chunks already exist for booklet %s", pdf_path.name, fuzet_szam)
                 skipped += 1
                 continue
@@ -912,6 +937,7 @@ def main() -> int:
                     clients=clients,
                     settings=settings,
                     skip_summary=args.no_summary,
+                    adoev=args.tax_year,
                 )
                 processed += 1
                 total_chunks += chunk_count

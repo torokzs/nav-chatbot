@@ -181,7 +181,9 @@ def parse_sse_payload(line: str) -> dict[str, Any] | None:
 
 
 
-def call_chat_endpoint(client: httpx.Client, endpoint: str, question: str) -> ChatRunResult:
+def call_chat_endpoint(
+    client: httpx.Client, endpoint: str, question: str, adoev: int
+) -> ChatRunResult:
     url = build_chat_url(endpoint)
     response_text_parts: list[str] = []
     sources: list[dict[str, Any]] = []
@@ -193,7 +195,11 @@ def call_chat_endpoint(client: httpx.Client, endpoint: str, question: str) -> Ch
     with client.stream(
         "POST",
         url,
-        json={"message": question, "include_evaluation_context": True},
+        json={
+            "message": question,
+            "adoev": adoev,
+            "include_evaluation_context": True,
+        },
     ) as response:
         response.raise_for_status()
         for line in response.iter_lines():
@@ -269,7 +275,8 @@ def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[d
         for index, row in enumerate(dataset_rows, start=1):
             question = str(row["question"])
             LOGGER.info("[%s/%s] Evaluating question: %s", index, len(dataset_rows), question)
-            run_result = call_chat_endpoint(client, endpoint, question)
+            adoev = int(row["adoev"])
+            run_result = call_chat_endpoint(client, endpoint, question, adoev)
             eval_rows.append(
                 {
                     "query": question,
@@ -281,6 +288,7 @@ def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[d
                     "ground_truth": row["expected_answer"],
                     "expected_fuzet": str(row["expected_fuzet"]),
                     "expected_page": int(row["expected_page"]),
+                    "adoev": adoev,
                     "sources": json.dumps(run_result.sources, ensure_ascii=False),
                 }
             )
@@ -347,6 +355,7 @@ def run_foundry_evaluation(
     eval_input_path: Path,
     *,
     output_path: Path = EVAL_OUTPUT_FILE,
+    citation_only: bool = False,
 ) -> dict[str, Any]:
     model_config, evaluator_credential = resolve_model_config()
     azure_ai_project = resolve_azure_ai_project()
@@ -357,9 +366,6 @@ def run_foundry_evaluation(
 
     evaluators: dict[str, Any] = {
         "citation_correctness": CitationCorrectnessEvaluator(),
-        "groundedness": GroundednessEvaluator(model_config, **eval_kwargs),
-        "relevance": RelevanceEvaluator(model_config, **eval_kwargs),
-        "fluency": FluencyEvaluator(model_config, **eval_kwargs),
     }
     evaluator_config: dict[str, Any] = {
         "citation_correctness": {
@@ -370,26 +376,33 @@ def run_foundry_evaluation(
                 "sources": "${data.sources}",
             }
         },
-        "groundedness": {
+    }
+
+    # PR smoke validates the deployed LLM through the backend call above and keeps
+    # evaluation deterministic with citation checks; full runs add GPT judges.
+    if not citation_only:
+        evaluators["groundedness"] = GroundednessEvaluator(model_config, **eval_kwargs)
+        evaluators["relevance"] = RelevanceEvaluator(model_config, **eval_kwargs)
+        evaluators["fluency"] = FluencyEvaluator(model_config, **eval_kwargs)
+        evaluator_config["groundedness"] = {
             "column_mapping": {
                 "query": "${data.query}",
                 "context": "${data.context}",
                 "response": "${data.response}",
             }
-        },
-        "relevance": {
+        }
+        evaluator_config["relevance"] = {
             "column_mapping": {
                 "query": "${data.query}",
                 "response": "${data.response}",
             }
-        },
-        "fluency": {
+        }
+        evaluator_config["fluency"] = {
             "column_mapping": {
                 "query": "${data.query}",
                 "response": "${data.response}",
             }
-        },
-    }
+        }
 
     kwargs: dict[str, Any] = {
         "data": str(eval_input_path),
@@ -473,18 +486,23 @@ def main() -> int:
     LOGGER.info("Prepared evaluation payload: %s", EVAL_INPUT_FILE)
 
     try:
-        result = run_foundry_evaluation(EVAL_INPUT_FILE)
+        result = run_foundry_evaluation(EVAL_INPUT_FILE, citation_only=args.smoke)
     finally:
         if EVAL_INPUT_FILE.exists():
             EVAL_INPUT_FILE.unlink()
 
     metrics = result.get("metrics", {}) if isinstance(result, dict) else {}
     summary = {
-        "groundedness": extract_metric(metrics, "groundedness"),
-        "relevance": extract_metric(metrics, "relevance"),
-        "fluency": extract_metric(metrics, "fluency"),
         "citation_correctness": extract_metric(metrics, "citation_correctness"),
     }
+    if not args.smoke:
+        summary.update(
+            {
+                "groundedness": extract_metric(metrics, "groundedness"),
+                "relevance": extract_metric(metrics, "relevance"),
+                "fluency": extract_metric(metrics, "fluency"),
+            }
+        )
     passed = print_summary(summary, threshold_module)
 
     studio_url = result.get("studio_url") if isinstance(result, dict) else None

@@ -116,6 +116,22 @@ const MessageBubble = ({ message }: MessageBubbleProps) => {
 
   return (
     <article aria-busy={message.isStreaming} style={bubbleStyles}>
+      {message.adoev ? (
+        <span
+          aria-label={`${message.adoev}-es adóév`}
+          style={{
+            justifySelf: isUser ? 'end' : 'start',
+            borderRadius: '999px',
+            padding: '0.2rem 0.6rem',
+            backgroundColor: isUser ? 'rgba(255, 255, 255, 0.18)' : colors.surfaceAlt,
+            color: isUser ? colors.white : colors.primary,
+            fontSize: '0.8rem',
+            fontWeight: 700,
+          }}
+        >
+          {message.adoev}-es adóév
+        </span>
+      ) : null}
       <div style={{ display: 'grid', gap: spacing[2] }}>
         {message.content ? renderRichText(message.content) : null}
         {message.isStreaming ? <TypingIndicator /> : null}

@@ -15,7 +15,7 @@ const SourceCard = ({ source, index }: SourceCardProps) => {
   const apiBase = import.meta.env.VITE_API_BASE_URL || '';
   const href = source.url
     ? `${apiBase}${source.url}`
-    : `${apiBase}/api/documents/${source.fuzet_szam}/pdf`;
+    : `${apiBase}/api/documents/${source.adoev}/${source.fuzet_szam}/pdf`;
 
   return (
     <a
@@ -37,7 +37,7 @@ const SourceCard = ({ source, index }: SourceCardProps) => {
         textDecoration: 'none',
       }}
     >
-      {`[${index}] ${source.fuzet_cim}, ${pageLabel}`}
+      {`[${index}] ${source.adoev} · ${source.fuzet_cim}, ${pageLabel}`}
     </a>
   );
 };

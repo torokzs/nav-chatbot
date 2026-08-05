@@ -25,6 +25,9 @@ param backendImageName string = 'backend'
 @description('Backend container image tag.')
 param backendImageTag string = 'latest'
 
+@description('Backend container image used during initial provisioning before azd builds the application image.')
+param backendBootstrapImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
 @description('Optional existing stable Container App revision name. When supplied, the latest revision is deployed with 0% traffic for blue/green promotion workflows.')
 param backendStableRevisionName string = ''
 
@@ -131,13 +134,14 @@ module containerApps './modules/container-apps.bicep' = if (deployHosting) {
       'azd-service-name': 'backend'
     })
     containerRegistryLoginServer: deployHosting ? containerRegistry.outputs.loginServer : ''
-    backendContainerImage: deployHosting ? '${containerRegistry.outputs.loginServer}/${backendImageName}:${backendImageTag}' : ''
+    backendContainerImage: backendBootstrapImage
     stableRevisionName: backendStableRevisionName
-    keyVaultSecretUris: {
-      aiSearchEndpoint: keyVault.outputs.aiSearchEndpointSecretUri
-      aiFoundryEndpoint: keyVault.outputs.aiFoundryEndpointSecretUri
-      docIntelligenceEndpoint: keyVault.outputs.docIntelligenceEndpointSecretUri
-      appInsightsConnectionString: keyVault.outputs.appInsightsConnectionStringSecretUri
+    envVars: {
+      aiSearchEndpoint: aiSearch.outputs.endpoint
+      aiFoundryEndpoint: aiFoundry.outputs.endpoint
+      docIntelligenceEndpoint: docIntelligence.outputs.endpoint
+      appInsightsConnectionString: appInsights.outputs.connectionString
+      frontendOrigin: staticWebApp.outputs.url
     }
   }
 }
@@ -170,7 +174,6 @@ module rbac './modules/rbac.bicep' = if (deployHosting) {
   scope: resourceGroup
   params: {
     containerAppPrincipalId: deployHosting ? containerApps.outputs.managedIdentityPrincipalId : ''
-    githubActionsPrincipalId: githubActionsPrincipalId
     keyVaultResourceId: keyVault.outputs.resourceId
     searchServiceResourceId: aiSearch.outputs.resourceId
     aiFoundryResourceId: aiFoundry.outputs.resourceId

@@ -411,13 +411,15 @@ def _run_questions(
                     time.sleep(minimum_interval - elapsed)
             last_started = time.monotonic()
             question = str(row["question"])
+            adoev = int(row["adoev"])
             LOGGER.info("[%d/%d] %s", index, len(dataset), question)
             try:
-                result = call_chat_endpoint(client, endpoint, question)
+                result = call_chat_endpoint(client, endpoint, question, adoev)
                 question_results.append(
                     {
                         "index": index,
                         "question": question,
+                        "adoev": adoev,
                         "response": result.response,
                         "sources": result.sources,
                         "evaluation_context": result.evaluation_context,
@@ -432,6 +434,7 @@ def _run_questions(
                 eval_rows.append(
                     {
                         "query": question,
+                        "adoev": adoev,
                         "response": result.response,
                         "context": evaluation_context_to_text(
                             result.evaluation_context,
