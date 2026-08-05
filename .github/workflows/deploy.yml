@@ -76,7 +76,7 @@ jobs:
           if [ -n "$GITHUB_ACTIONS_PRINCIPAL_ID" ]; then
             azd env set GITHUB_ACTIONS_PRINCIPAL_ID "$GITHUB_ACTIONS_PRINCIPAL_ID"
           fi
-          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --tag azd-service-name=backend --resource-type Microsoft.App/containerApps --query "[0].name" -o tsv 2>/dev/null || true)
+          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv 2>/dev/null || true)
           if [ -n "$BACKEND_APP_NAME" ]; then
             STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
             azd env set BACKEND_STABLE_REVISION_NAME "$STABLE_REVISION"
@@ -133,7 +133,7 @@ jobs:
           azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
           ACR_ENDPOINT=$(az acr list -g "$AZURE_RESOURCE_GROUP" --query "[0].loginServer" -o tsv)
           azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR_ENDPOINT"
-          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --tag azd-service-name=backend --resource-type Microsoft.App/containerApps --query "[0].name" -o tsv 2>/dev/null || true)
+          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv 2>/dev/null || true)
           if [ -n "$BACKEND_APP_NAME" ]; then
             STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
             azd env set BACKEND_STABLE_REVISION_NAME "$STABLE_REVISION"
@@ -152,7 +152,7 @@ jobs:
         id: deploy_metadata
         shell: bash
         run: |
-          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --tag azd-service-name=backend --resource-type Microsoft.App/containerApps --query "[0].name" -o tsv)
+          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv)
           REVISION_NAME=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
           BACKEND_FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.configuration.ingress.fqdn -o tsv)
           echo "backend_url=https://$BACKEND_FQDN" >> "$GITHUB_OUTPUT"
