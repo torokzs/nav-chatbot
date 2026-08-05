@@ -133,11 +133,11 @@ module containerApps './modules/container-apps.bicep' = if (deployHosting) {
     containerRegistryLoginServer: deployHosting ? containerRegistry.outputs.loginServer : ''
     backendContainerImage: deployHosting ? '${containerRegistry.outputs.loginServer}/${backendImageName}:${backendImageTag}' : ''
     stableRevisionName: backendStableRevisionName
-    keyVaultSecretUris: {
-      aiSearchEndpoint: keyVault.outputs.aiSearchEndpointSecretUri
-      aiFoundryEndpoint: keyVault.outputs.aiFoundryEndpointSecretUri
-      docIntelligenceEndpoint: keyVault.outputs.docIntelligenceEndpointSecretUri
-      appInsightsConnectionString: keyVault.outputs.appInsightsConnectionStringSecretUri
+    envVars: {
+      aiSearchEndpoint: aiSearch.outputs.endpoint
+      aiFoundryEndpoint: aiFoundry.outputs.endpoint
+      docIntelligenceEndpoint: docIntelligence.outputs.endpoint
+      appInsightsConnectionString: appInsights.outputs.connectionString
     }
   }
 }
