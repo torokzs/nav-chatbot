@@ -192,6 +192,11 @@ jobs:
         run: pytest tests/integration/test_smoke.py -q
         env:
           BACKEND_URL: ${{ needs.deploy.outputs.backend_url }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
   eval-smoke:
     runs-on: ubuntu-latest
@@ -215,6 +220,11 @@ jobs:
         run: python evals/run_eval.py --endpoint "$BACKEND_URL" --smoke
         env:
           BACKEND_URL: ${{ needs.deploy.outputs.backend_url }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Upload smoke eval results
         if: always()
