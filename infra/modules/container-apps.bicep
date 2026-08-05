@@ -103,7 +103,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
           image: backendContainerImage
           env: [
             {
-              name: 'AZURE_AI_SEARCH_ENDPOINT'
+              name: 'AZURE_SEARCH_ENDPOINT'
               value: contains(envVars, 'aiSearchEndpoint') ? envVars.aiSearchEndpoint : ''
             }
             {
