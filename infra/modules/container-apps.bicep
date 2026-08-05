@@ -90,7 +90,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
       ]
       ingress: {
         external: true
-        targetPort: 80
+        targetPort: 8000
         transport: 'http'
         allowInsecure: false
         traffic: trafficRules
