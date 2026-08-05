@@ -28,8 +28,8 @@ var contributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorizatio
 var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var keyVaultSecretsOfficerRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
 var searchIndexDataReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '1407120a-92aa-4202-b7e9-c0e197c71c8f')
-var cognitiveServicesOpenAIUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b3e8bca5-c4f8-47b7-a51c-adb3d2511d46')
-var cognitiveServicesUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'bfa99427-4434-4bcb-9824-37b82d74c9c7')
+var cognitiveServicesOpenAIUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+var cognitiveServicesUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')
 var storageBlobDataReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var assignGitHubActionsPrincipal = !empty(githubActionsPrincipalId)
@@ -120,7 +120,7 @@ resource containerAppToStorageBlobDataReader 'Microsoft.Authorization/roleAssign
 }
 
 resource githubActionsToResourceGroupContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (assignGitHubActionsPrincipal) {
-  name: guid(resourceGroup().id, githubActionsPrincipalId, contributorRoleDefinitionId)
+  name: guid(resourceGroup().id, githubActionsPrincipalId, 'Contributor')
   properties: {
     roleDefinitionId: contributorRoleDefinitionId
     principalId: githubActionsPrincipalId
@@ -129,7 +129,7 @@ resource githubActionsToResourceGroupContributor 'Microsoft.Authorization/roleAs
 }
 
 resource githubActionsToKeyVaultSecretsOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (assignGitHubActionsPrincipal) {
-  name: guid(keyVault.id, githubActionsPrincipalId, keyVaultSecretsOfficerRoleDefinitionId)
+  name: guid(keyVault.id, githubActionsPrincipalId, 'Key Vault Secrets Officer')
   scope: keyVault
   properties: {
     roleDefinitionId: keyVaultSecretsOfficerRoleDefinitionId
