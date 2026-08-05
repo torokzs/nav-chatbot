@@ -41,12 +41,34 @@ var trafficRules = empty(stableRevisionName) ? [
   }
 ]
 
-resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: workspaceName
+  location: location
+  tags: tags
+  properties: {
+    retentionInDays: 30
+    features: {
+      searchVersion: 1
+    }
+    sku: {
+      name: 'PerGB2018'
+    }
+  }
 }
 
-resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
+resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: environmentName
+  location: location
+  tags: tags
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logAnalyticsWorkspace.properties.customerId
+        sharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
+      }
+    }
+  }
 }
 
 resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -60,9 +82,15 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: containerAppsEnvironment.id
     configuration: {
       activeRevisionsMode: 'Multiple'
+      registries: empty(containerRegistryLoginServer) ? [] : [
+        {
+          server: containerRegistryLoginServer
+          identity: 'system'
+        }
+      ]
       ingress: {
         external: true
-        targetPort: 80
+        targetPort: 8000
         transport: 'http'
         allowInsecure: false
         traffic: trafficRules
@@ -75,7 +103,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
           image: backendContainerImage
           env: [
             {
-              name: 'AZURE_AI_SEARCH_ENDPOINT'
+              name: 'AZURE_SEARCH_ENDPOINT'
               value: contains(envVars, 'aiSearchEndpoint') ? envVars.aiSearchEndpoint : ''
             }
             {
@@ -97,6 +125,10 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: contains(envVars, 'appInsightsConnectionString') ? envVars.appInsightsConnectionString : ''
+            }
+            {
+              name: 'FRONTEND_ORIGIN'
+              value: contains(envVars, 'frontendOrigin') ? envVars.frontendOrigin : 'http://localhost:3000'
             }
           ]
           resources: {

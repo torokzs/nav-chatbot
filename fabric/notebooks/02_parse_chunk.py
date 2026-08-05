@@ -28,7 +28,10 @@ except ImportError:
         raise RuntimeError("This notebook must run inside Microsoft Fabric or Synapse.") from exc
 
 
-RAW_RELATIVE_PATH = os.getenv("RAW_RELATIVE_PATH", "raw/2026")
+TAX_YEAR = int(os.getenv("TAX_YEAR", "2026"))
+if TAX_YEAR not in range(2021, 2027):
+    raise ValueError("TAX_YEAR must be between 2021 and 2026.")
+RAW_RELATIVE_PATH = os.getenv("RAW_RELATIVE_PATH", f"raw/{TAX_YEAR}")
 CHUNKS_TABLE = os.getenv("CHUNKS_TABLE", "nav_chunks")
 DOCUMENTS_TABLE = os.getenv("DOCUMENTS_TABLE", "nav_documents")
 DOC_INTEL_ENDPOINT = os.getenv("DOCUMENT_INTELLIGENCE_ENDPOINT", "")
@@ -367,9 +370,10 @@ def chunk_sentence_entries(
         chunk_text = f"{breadcrumb}\n\n{body}" if breadcrumb else body
         pages = [item["page"] for item in items]
         references = sorted(set(REFERENCE_PATTERN.findall(chunk_text)))
-        digest_source = f"{file_name}|{sequence}|{min(pages)}|{max(pages)}|{chunk_text}".encode("utf-8")
+        digest_source = f"{TAX_YEAR}|{file_name}|{sequence}|{min(pages)}|{max(pages)}|{chunk_text}".encode("utf-8")
         return {
             "chunk_id": hashlib.sha1(digest_source).hexdigest()[:24],
+            "adoev": TAX_YEAR,
             "fuzet_szam": fuzet_szam,
             "fuzet_cim": fuzet_cim,
             "breadcrumb": breadcrumb,
@@ -455,10 +459,11 @@ def build_chunks_for_document(file_name: str, result: Any) -> tuple[list[dict[st
             table_breadcrumb = current_breadcrumb()
             table_text = f"{table_breadcrumb}\n\n{element.text}" if table_breadcrumb else element.text
             references = sorted(set(REFERENCE_PATTERN.findall(table_text)))
-            digest_source = f"{file_name}|table|{sequence}|{element.page_from}|{element.page_to}|{table_text}".encode("utf-8")
+            digest_source = f"{TAX_YEAR}|{file_name}|table|{sequence}|{element.page_from}|{element.page_to}|{table_text}".encode("utf-8")
             chunks.append(
                 {
                     "chunk_id": hashlib.sha1(digest_source).hexdigest()[:24],
+                    "adoev": TAX_YEAR,
                     "fuzet_szam": fuzet_szam,
                     "fuzet_cim": fuzet_cim,
                     "breadcrumb": table_breadcrumb,
@@ -483,6 +488,8 @@ def build_chunks_for_document(file_name: str, result: Any) -> tuple[list[dict[st
     flush_sentences()
 
     document_row = {
+        "document_id": f"{TAX_YEAR}-{fuzet_szam}",
+        "adoev": TAX_YEAR,
         "fuzet_szam": fuzet_szam,
         "fuzet_cim": fuzet_cim,
         "kozzeteve": kozzeteve,
@@ -524,13 +531,13 @@ documents_df = spark.createDataFrame([Row(**row) for row in document_rows])
 
 (
     chunks_df.write.format("delta")
-    .mode("overwrite")
+    .mode("append")
     .option("overwriteSchema", "true")
     .saveAsTable(CHUNKS_TABLE)
 )
 (
     documents_df.write.format("delta")
-    .mode("overwrite")
+    .mode("append")
     .option("overwriteSchema", "true")
     .saveAsTable(DOCUMENTS_TABLE)
 )

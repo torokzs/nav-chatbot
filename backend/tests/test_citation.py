@@ -6,6 +6,7 @@ def test_render_citation_formats_chunk_metadata() -> None:
     chunk = ChunkResult(
         content="Teszt tartalom",
         metadata={
+            "adoev": 2024,
             "fuzet_szam": "12",
             "fuzet_cim": "Áfa tudnivalók",
             "page_from": 4,
@@ -24,6 +25,7 @@ def test_format_citations_deduplicates_sources() -> None:
         ChunkResult(
             content="Első rész",
             metadata={
+                "adoev": 2024,
                 "fuzet_szam": "12",
                 "fuzet_cim": "Áfa tudnivalók",
                 "page_from": 4,
@@ -35,6 +37,7 @@ def test_format_citations_deduplicates_sources() -> None:
         ChunkResult(
             content="Második rész",
             metadata={
+                "adoev": 2024,
                 "fuzet_szam": "12",
                 "fuzet_cim": "Áfa tudnivalók",
                 "page_from": 4,
@@ -51,7 +54,8 @@ def test_format_citations_deduplicates_sources() -> None:
     assert citations[0].fuzet_szam == "12"
     assert citations[0].page_from == 4
     assert citations[0].page_to == 5
-    assert citations[0].url == "/api/documents/12/pdf"
+    assert citations[0].adoev == 2024
+    assert citations[0].url == "/api/documents/2024/12/pdf"
 
 
 def test_format_citations_returns_top_three_ranked_sources() -> None:
@@ -59,6 +63,7 @@ def test_format_citations_returns_top_three_ranked_sources() -> None:
         ChunkResult(
             content=f"Rész {index}",
             metadata={
+                "adoev": 2024,
                 "fuzet_szam": str(index),
                 "fuzet_cim": f"Füzet {index}",
                 "page_from": index,

@@ -1,6 +1,6 @@
 # Retrieval architektúra
 
-Ez a dokumentum a NAV 2026 információs füzetek feldolgozásának és visszakeresésének működését írja le.
+Ez a dokumentum a NAV 2021–2026 információs füzetek feldolgozásának és visszakeresésének működését írja le.
 
 ## Feldolgozási áttekintés
 
@@ -20,7 +20,7 @@ A PDF-ek feldolgozása Microsoft Fabric notebookból történik az Azure AI Docu
 
 Fő lépések:
 
-1. A nyers PDF-ek a Lakehouse `Files/raw/2026/` útvonalára kerülnek.
+1. A nyers PDF-ek a Lakehouse `Files/raw/<adoev>/` útvonalára kerülnek.
 2. A `prebuilt-layout` futtatás `MARKDOWN` kimenettel történik, `hu-HU` locale mellett.
 3. A rendszer bekezdéseket, címsorokat és táblákat külön kezeli.
 4. A címsorokból hierarchikus breadcrumb épül.
@@ -51,6 +51,7 @@ A chunk- és dokumentumszintű indexeléshez az alábbi metaadatok fontosak:
 | Mező | Jelentés |
 |------|----------|
 | `fuzet_szam` | Az információs füzet sorszáma |
+| `adoev` | A füzet adóéve; minden keresés kötelező szűrője |
 | `fuzet_cim` | A füzet címe |
 | `breadcrumb` | Szekcióútvonal / címsor-hierarchia |
 | `page_from` / `page_to` | Oldaltartomány |
@@ -78,7 +79,7 @@ Ez javítja:
 
 ### 1. Document routing
 
-Először a **documents indexen** történik vektorkeresés, amely a legvalószínűbb füzeteket rangsorolja.
+Először a **documents indexen** történik évszűrt vektorkeresés, amely a legvalószínűbb füzeteket rangsorolja.
 
 - keresés típusa: vector search
 - cél: top-3 releváns füzet kiválasztása
@@ -170,7 +171,9 @@ Javasolt / használt mezők:
 
 | Mező | Típus | Megjegyzés |
 |------|------|------------|
-| `fuzet_szam` | string | key, filterable |
+| `document_id` | string | key; `<adoev>-<fuzet_szam>` |
+| `adoev` | int | filterable, facetable |
+| `fuzet_szam` | string | filterable |
 | `fuzet_cim` | string | searchable, `hu.microsoft`, synonym map |
 | `kozzeteve` | string | filterable |
 | `total_pages` | int | filterable, sortable |
@@ -189,6 +192,7 @@ Semantic config:
 | Mező | Típus | Megjegyzés |
 |------|------|------------|
 | `chunk_id` | string | key |
+| `adoev` | int | filterable, facetable |
 | `fuzet_szam` | string | filterable, facetable |
 | `fuzet_cim` | string | searchable, `hu.microsoft` |
 | `breadcrumb` | string | searchable, `hu.microsoft`, synonym map |
@@ -220,7 +224,7 @@ Semantic config:
 
 Újraépítés javasolt, ha:
 
-- új NAV 2026 füzet kerül be,
+- új NAV füzet vagy adóév kerül be,
 - változik a chunking stratégia,
 - módosul a synonym map,
 - új mező kerül az indexsémába,

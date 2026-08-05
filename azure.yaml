@@ -7,7 +7,7 @@ services:
     host: containerapp
     language: python
     docker:
-      path: ./backend/Dockerfile
+      path: ./Dockerfile
   frontend:
     project: ./frontend
     host: staticwebapp

@@ -44,7 +44,7 @@ def test_chat_endpoint_streams_tokens_and_sources(backend_url: str) -> None:
             with client.stream(
                 "POST",
                 "/api/chat",
-                json={"message": "Mikor kell beadni az SZJA bevallást?"},
+                json={"message": "Mikor kell beadni az SZJA bevallást?", "adoev": 2026},
                 headers={"Accept": "text/event-stream"},
             ) as response:
                 assert response.status_code == 200
@@ -67,6 +67,7 @@ def test_chat_endpoint_streams_tokens_and_sources(backend_url: str) -> None:
     assert sources_event is not None, "Expected a sources event in the SSE stream."
     citations = sources_event.get("content")
     assert isinstance(citations, list) and citations, "Expected at least one citation in the sources event."
+    assert all(item.get("adoev") == 2026 for item in citations)
 
 
 if __name__ == "__main__":

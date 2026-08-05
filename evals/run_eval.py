@@ -162,13 +162,15 @@ def parse_sse_payload(line: str) -> dict[str, Any] | None:
 
 
 
-def call_chat_endpoint(client: httpx.Client, endpoint: str, question: str) -> ChatRunResult:
+def call_chat_endpoint(
+    client: httpx.Client, endpoint: str, question: str, adoev: int
+) -> ChatRunResult:
     url = build_chat_url(endpoint)
     response_text_parts: list[str] = []
     sources: list[dict[str, Any]] = []
 
     LOGGER.debug("Calling %s", url)
-    with client.stream("POST", url, json={"message": question}) as response:
+    with client.stream("POST", url, json={"message": question, "adoev": adoev}) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line:
@@ -216,7 +218,8 @@ def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[d
         for index, row in enumerate(dataset_rows, start=1):
             question = str(row["question"])
             LOGGER.info("[%s/%s] Evaluating question: %s", index, len(dataset_rows), question)
-            run_result = call_chat_endpoint(client, endpoint, question)
+            adoev = int(row["adoev"])
+            run_result = call_chat_endpoint(client, endpoint, question, adoev)
             eval_rows.append(
                 {
                     "query": question,
@@ -225,6 +228,7 @@ def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[d
                     "ground_truth": row["expected_answer"],
                     "expected_fuzet": str(row["expected_fuzet"]),
                     "expected_page": int(row["expected_page"]),
+                    "adoev": adoev,
                     "sources": json.dumps(run_result.sources, ensure_ascii=False),
                 }
             )
@@ -287,7 +291,7 @@ def resolve_model_config() -> tuple[dict[str, str], Any]:
 
 
 
-def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
+def run_foundry_evaluation(eval_input_path: Path, citation_only: bool = False) -> dict[str, Any]:
     model_config, evaluator_credential = resolve_model_config()
     azure_ai_project = resolve_azure_ai_project()
 
@@ -310,22 +314,24 @@ def run_foundry_evaluation(eval_input_path: Path) -> dict[str, Any]:
         },
     }
 
-    # Try to add GPT-based evaluators; skip if model_config fails validation
-    try:
-        evaluators["groundedness"] = GroundednessEvaluator(model_config, **eval_kwargs)
-        evaluators["relevance"] = RelevanceEvaluator(model_config, **eval_kwargs)
-        evaluators["fluency"] = FluencyEvaluator(model_config, **eval_kwargs)
-        evaluator_config["groundedness"] = {
-            "column_mapping": {"query": "${data.query}", "context": "${data.context}", "response": "${data.response}"}
-        }
-        evaluator_config["relevance"] = {
-            "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
-        }
-        evaluator_config["fluency"] = {
-            "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
-        }
-    except Exception as exc:
-        LOGGER.warning("GPT-based evaluators unavailable (auth issue): %s. Running citation_correctness only.", exc)
+    # PR smoke validates the deployed LLM through the backend call above and keeps
+    # evaluation deterministic with citation checks; full runs add GPT judges.
+    if not citation_only:
+        try:
+            evaluators["groundedness"] = GroundednessEvaluator(model_config, **eval_kwargs)
+            evaluators["relevance"] = RelevanceEvaluator(model_config, **eval_kwargs)
+            evaluators["fluency"] = FluencyEvaluator(model_config, **eval_kwargs)
+            evaluator_config["groundedness"] = {
+                "column_mapping": {"query": "${data.query}", "context": "${data.context}", "response": "${data.response}"}
+            }
+            evaluator_config["relevance"] = {
+                "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
+            }
+            evaluator_config["fluency"] = {
+                "column_mapping": {"query": "${data.query}", "response": "${data.response}"}
+            }
+        except Exception as exc:
+            LOGGER.warning("GPT-based evaluators unavailable (auth issue): %s. Running citation_correctness only.", exc)
 
     kwargs: dict[str, Any] = {
         "data": str(eval_input_path),
@@ -409,18 +415,23 @@ def main() -> int:
     LOGGER.info("Prepared evaluation payload: %s", EVAL_INPUT_FILE)
 
     try:
-        result = run_foundry_evaluation(EVAL_INPUT_FILE)
+        result = run_foundry_evaluation(EVAL_INPUT_FILE, citation_only=args.smoke)
     finally:
         if EVAL_INPUT_FILE.exists():
             EVAL_INPUT_FILE.unlink()
 
     metrics = result.get("metrics", {}) if isinstance(result, dict) else {}
     summary = {
-        "groundedness": extract_metric(metrics, "groundedness"),
-        "relevance": extract_metric(metrics, "relevance"),
-        "fluency": extract_metric(metrics, "fluency"),
         "citation_correctness": extract_metric(metrics, "citation_correctness"),
     }
+    if not args.smoke:
+        summary.update(
+            {
+                "groundedness": extract_metric(metrics, "groundedness"),
+                "relevance": extract_metric(metrics, "relevance"),
+                "fluency": extract_metric(metrics, "fluency"),
+            }
+        )
     passed = print_summary(summary, threshold_module)
 
     # Report optional GPT-based metrics (informational, not gating)

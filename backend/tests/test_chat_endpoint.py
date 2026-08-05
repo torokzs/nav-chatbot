@@ -23,6 +23,7 @@ class FakeRetrievalService:
         self,
         query: str,
         rewritten_queries: list[str],
+        adoev: int,
     ) -> tuple[list[ChunkResult], list[DocumentResult]]:
         if self.should_fail:
             raise RuntimeError("search failure")
@@ -31,6 +32,7 @@ class FakeRetrievalService:
                 ChunkResult(
                     content="Az SZJA bevallás határideje május 20.",
                     metadata={
+                        "adoev": adoev,
                         "fuzet_szam": "1",
                         "fuzet_cim": "SZJA információk",
                         "page_from": 10,
@@ -40,7 +42,7 @@ class FakeRetrievalService:
                     score=0.99,
                 )
             ],
-            [DocumentResult(fuzet_szam="1", fuzet_cim="SZJA információk", score=0.99)],
+            [DocumentResult(adoev=adoev, fuzet_szam="1", fuzet_cim="SZJA információk", score=0.99)],
         )
 
     async def close(self) -> None:
@@ -80,7 +82,7 @@ async def test_chat_endpoint_streams_sse_events(mock_settings: Settings) -> None
     ) as client, client.stream(
         "POST",
         "/api/chat",
-        json={"message": "Mikor kell beadni az SZJA bevallást?"},
+        json={"message": "Mikor kell beadni az SZJA bevallást?", "adoev": 2026},
     ) as response:
         assert response.status_code == 200
         events = [
@@ -91,7 +93,8 @@ async def test_chat_endpoint_streams_sse_events(mock_settings: Settings) -> None
 
     assert [event["type"] for event in events] == ["token", "token", "sources", "done"]
     assert events[2]["content"][0]["fuzet_szam"] == "1"
-    assert events[2]["content"][0]["url"] == "/api/documents/1/pdf"
+    assert events[2]["content"][0]["adoev"] == 2026
+    assert events[2]["content"][0]["url"] == "/api/documents/2026/1/pdf"
 
 
 @pytest.mark.asyncio
@@ -109,7 +112,7 @@ async def test_chat_endpoint_streams_error_event(mock_settings: Settings) -> Non
     ) as client, client.stream(
         "POST",
         "/api/chat",
-        json={"message": "Mikor kell beadni az SZJA bevallást?"},
+        json={"message": "Mikor kell beadni az SZJA bevallást?", "adoev": 2026},
     ) as response:
         events = [
             json.loads(line.removeprefix("data: "))
@@ -142,7 +145,7 @@ async def test_get_document_pdf_serves_matching_pdf(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
-        response = await client.get("/api/documents/1/pdf")
+        response = await client.get("/api/documents/2026/1/pdf")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/pdf"
@@ -165,6 +168,23 @@ async def test_get_document_pdf_returns_404_for_missing_booklet(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
-        response = await client.get("/api/documents/999/pdf")
+        response = await client.get("/api/documents/2026/999/pdf")
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_rejects_missing_tax_year(mock_settings: Settings) -> None:
+    app = create_app()
+    app.state.settings = mock_settings
+    app.state.retrieval_service = FakeRetrievalService()
+    app.state.llm_service = FakeLLMService()
+    app.dependency_overrides[get_settings] = lambda: mock_settings
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post("/api/chat", json={"message": "Mikor kell bevallani?"})
+
+    assert response.status_code == 422
