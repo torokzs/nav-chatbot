@@ -296,6 +296,6 @@ az containerapp update \
 2. Ellenőrizd, hogy minden Delta sor rendelkezik `adoev` mezővel, és nincs ismétlődő `document_id` vagy `chunk_id`.
 3. Futtasd a `03` indexelést a közös Delta táblákra.
 4. Futtasd a backend/frontend unit teszteket, az integration smoke-ot és a többéves evalt.
-5. Indítsd kézzel a `Deploy` workflow-t, és csak a sikeres index rebuild után állítsd az `indexes_ready` megerősítést igazra.
-6. A deployment új Container Apps revíziót hoz létre; csak sikeres quality gate után történjen traffic shift.
-7. Produkcióban minden adóévre ellenőrizz legalább egy választ, annak évjelvényét, forrásévét és PDF-linkjét.
+5. A PR megnyitása és minden új push automatikusan elindítja a `test` deploymentet.
+6. A workflow buildet, provisionálást, deployt, integration smoke-ot és LLM evalt futtat.
+7. A PR csak a teljes quality gate sikeres futása után merge-elhető; production deployment ebben a fázisban nincs.

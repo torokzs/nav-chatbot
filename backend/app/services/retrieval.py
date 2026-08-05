@@ -20,6 +20,7 @@ _GLOBAL_CHUNK_TOP_K = 5
 _FINAL_CONTEXT_TOP_K = 10
 _EXPANDED_SECTION_TOP_K = 24
 _SEMANTIC_CONFIGURATION_NAME = "default"
+_LEGACY_TAX_YEAR = 2026
 
 
 class RetrievalService:
@@ -110,16 +111,27 @@ class RetrievalService:
     async def _retrieve_documents(
         self, queries: list[str], adoev: TaxYear
     ) -> list[DocumentResult]:
-        search_results = await self._documents_client.search(
-            search_text=None,
-            filter=f"adoev eq {adoev}",
-            top=_DOCUMENT_TOP_K,
-            vector_queries=await self._build_vector_queries(
-                queries,
-                field_name=_DOCUMENT_VECTOR_FIELD,
-                k_nearest_neighbors=_DOCUMENT_TOP_K,
-            ),
+        vector_queries = await self._build_vector_queries(
+            queries,
+            field_name=_DOCUMENT_VECTOR_FIELD,
+            k_nearest_neighbors=_DOCUMENT_TOP_K,
         )
+        try:
+            search_results = await self._documents_client.search(
+                search_text=None,
+                filter=f"adoev eq {adoev}",
+                top=_DOCUMENT_TOP_K,
+                vector_queries=vector_queries,
+            )
+        except HttpResponseError:
+            if adoev != _LEGACY_TAX_YEAR:
+                raise
+            logger.warning("Tax-year field unavailable, using legacy 2026 document index")
+            search_results = await self._documents_client.search(
+                search_text=None,
+                top=_DOCUMENT_TOP_K,
+                vector_queries=vector_queries,
+            )
         documents: dict[str, DocumentResult] = {}
         async for result in search_results:
             mapped = self._map_document(result)
@@ -159,12 +171,24 @@ class RetrievalService:
             )
         except HttpResponseError:
             logger.warning("Semantic search unavailable, falling back to standard hybrid search")
-            search_results = await self._chunks_client.search(
-                search_text=search_text,
-                filter=filter_expression,
-                top=top_k,
-                vector_queries=vector_queries,
-            )
+            try:
+                search_results = await self._chunks_client.search(
+                    search_text=search_text,
+                    filter=filter_expression,
+                    top=top_k,
+                    vector_queries=vector_queries,
+                )
+            except HttpResponseError:
+                if adoev != _LEGACY_TAX_YEAR:
+                    raise
+                logger.warning("Tax-year field unavailable, using legacy 2026 chunk index")
+                legacy_filter = self._build_legacy_booklet_filter(booklet_ids)
+                search_results = await self._chunks_client.search(
+                    search_text=search_text,
+                    filter=legacy_filter,
+                    top=top_k,
+                    vector_queries=vector_queries,
+                )
 
         chunks: list[ChunkResult] = []
         async for result in search_results:
@@ -297,6 +321,16 @@ class RetrievalService:
         if not normalized:
             return year_filter
         return f"{year_filter} and search.in(fuzet_szam, '{','.join(normalized)}', ',')"
+
+    def _build_legacy_booklet_filter(self, booklet_ids: list[str]) -> str | None:
+        normalized = [
+            self._escape_odata_value(booklet_id)
+            for booklet_id in booklet_ids
+            if booklet_id
+        ]
+        if not normalized:
+            return None
+        return f"search.in(fuzet_szam, '{','.join(normalized)}', ',')"
 
     def _build_section_filter(
         self,

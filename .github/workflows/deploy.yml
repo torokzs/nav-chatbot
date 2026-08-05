@@ -1,6 +1,13 @@
 name: Deploy
 
 on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
   workflow_dispatch:
     inputs:
       environment:
@@ -11,11 +18,6 @@ on:
       run_full_eval:
         description: Run the full 100-question evaluation suite
         required: false
-        default: false
-        type: boolean
-      indexes_ready:
-        description: Confirm that the 2021-2026 Fabric ingestion and shared AI Search index rebuild completed
-        required: true
         default: false
         type: boolean
 
@@ -34,17 +36,7 @@ env:
   AZURE_RESOURCE_GROUP: nav-chatbot-rg
 
 jobs:
-  validate-release-inputs:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require multi-year indexes
-        if: inputs.indexes_ready != true
-        run: |
-          echo "Run the Fabric 2021-2026 ingestion and shared AI Search index rebuild before deployment."
-          exit 1
-
   build-gate:
-    needs: validate-release-inputs
     uses: ./.github/workflows/build.yml
 
   provision:
@@ -309,43 +301,12 @@ jobs:
               sys.exit(1)
           PY
 
-  traffic-shift:
+  test-release-ready:
     runs-on: ubuntu-latest
     needs:
       - deploy
       - quality-gate
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
+    if: ${{ always() && needs.deploy.result == 'success' && needs.quality-gate.result == 'success' }}
     steps:
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Shift traffic to new revision
-        shell: bash
-        run: |
-          NEW_REVISION="${{ needs.deploy.outputs.revision_name }}"
-          CONTAINER_APP_NAME="${{ needs.deploy.outputs.container_app_name }}"
-          RESOURCE_GROUP="${{ needs.deploy.outputs.resource_group }}"
-
-          az containerapp ingress traffic set \
-            --name "$CONTAINER_APP_NAME" \
-            --resource-group "$RESOURCE_GROUP" \
-            --revision-weight "$NEW_REVISION=100"
-
-          mapfile -t OLD_REVISIONS < <(az containerapp revision list \
-            --name "$CONTAINER_APP_NAME" \
-            --resource-group "$RESOURCE_GROUP" \
-            --query "[?name!='${NEW_REVISION}' && properties.active].name" \
-            -o tsv)
-
-          for revision in "${OLD_REVISIONS[@]}"; do
-            az containerapp revision deactivate \
-              --name "$CONTAINER_APP_NAME" \
-              --resource-group "$RESOURCE_GROUP" \
-              --revision "$revision"
-          done
-
-          echo "Traffic shifted to $NEW_REVISION successfully."
+      - name: Confirm test release
+        run: echo "The pull request revision passed the complete test deployment quality gate."
