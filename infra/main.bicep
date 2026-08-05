@@ -173,7 +173,6 @@ module rbac './modules/rbac.bicep' = if (deployHosting) {
   scope: resourceGroup
   params: {
     containerAppPrincipalId: deployHosting ? containerApps.outputs.managedIdentityPrincipalId : ''
-    githubActionsPrincipalId: githubActionsPrincipalId
     keyVaultResourceId: keyVault.outputs.resourceId
     searchServiceResourceId: aiSearch.outputs.resourceId
     aiFoundryResourceId: aiFoundry.outputs.resourceId
