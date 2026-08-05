@@ -162,13 +162,15 @@ def parse_sse_payload(line: str) -> dict[str, Any] | None:
 
 
 
-def call_chat_endpoint(client: httpx.Client, endpoint: str, question: str) -> ChatRunResult:
+def call_chat_endpoint(
+    client: httpx.Client, endpoint: str, question: str, adoev: int
+) -> ChatRunResult:
     url = build_chat_url(endpoint)
     response_text_parts: list[str] = []
     sources: list[dict[str, Any]] = []
 
     LOGGER.debug("Calling %s", url)
-    with client.stream("POST", url, json={"message": question}) as response:
+    with client.stream("POST", url, json={"message": question, "adoev": adoev}) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line:
@@ -216,7 +218,8 @@ def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[d
         for index, row in enumerate(dataset_rows, start=1):
             question = str(row["question"])
             LOGGER.info("[%s/%s] Evaluating question: %s", index, len(dataset_rows), question)
-            run_result = call_chat_endpoint(client, endpoint, question)
+            adoev = int(row["adoev"])
+            run_result = call_chat_endpoint(client, endpoint, question, adoev)
             eval_rows.append(
                 {
                     "query": question,
@@ -225,6 +228,7 @@ def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[d
                     "ground_truth": row["expected_answer"],
                     "expected_fuzet": str(row["expected_fuzet"]),
                     "expected_page": int(row["expected_page"]),
+                    "adoev": adoev,
                     "sources": json.dumps(run_result.sources, ensure_ascii=False),
                 }
             )

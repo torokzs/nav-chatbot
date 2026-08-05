@@ -41,7 +41,7 @@ const Header = () => {
         </div>
         <div>
           <p style={{ margin: 0, fontSize: '1.5rem', fontWeight: 800 }}>NAV Információs Asszisztens</p>
-          <p style={{ margin: 0, opacity: 0.92 }}>2026-os adózási tájékoztató füzetek</p>
+          <p style={{ margin: 0, opacity: 0.92 }}>2021–2026-os adózási tájékoztató füzetek</p>
         </div>
       </div>
     </header>

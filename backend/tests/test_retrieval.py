@@ -11,14 +11,23 @@ async def test_retrieve_merges_global_chunks_and_updates_documents(
 ) -> None:
     service = object.__new__(RetrievalService)
 
-    async def fake_retrieve_documents(queries: list[str]) -> list[DocumentResult]:
+    async def fake_retrieve_documents(queries: list[str], adoev: int) -> list[DocumentResult]:
         assert queries == ["TAO túlfizetés", "tao befizetés visszaigénylés"]
-        return [DocumentResult(fuzet_szam="12", fuzet_cim="Általános tájékoztató", score=0.61)]
+        assert adoev == 2024
+        return [
+            DocumentResult(
+                adoev=2024,
+                fuzet_szam="12",
+                fuzet_cim="Általános tájékoztató",
+                score=0.61,
+            )
+        ]
 
     chunk_calls: list[tuple[list[str], list[str], int]] = []
     filtered_duplicate = ChunkResult(
         content="Duplikált rész",
         metadata={
+            "adoev": 2024,
             "fuzet_szam": "12",
             "fuzet_cim": "Általános tájékoztató",
             "page_from": 3,
@@ -30,6 +39,7 @@ async def test_retrieve_merges_global_chunks_and_updates_documents(
     global_duplicate = ChunkResult(
         content="Duplikált rész",
         metadata={
+            "adoev": 2024,
             "fuzet_szam": "12",
             "fuzet_cim": "Általános tájékoztató",
             "page_from": 3,
@@ -41,6 +51,7 @@ async def test_retrieve_merges_global_chunks_and_updates_documents(
     global_hit = ChunkResult(
         content="A tao túlfizetés szabálya a 55-ös füzetben szerepel.",
         metadata={
+            "adoev": 2024,
             "fuzet_szam": "55",
             "fuzet_cim": "Tao-felajánlás",
             "page_from": 8,
@@ -53,9 +64,11 @@ async def test_retrieve_merges_global_chunks_and_updates_documents(
     async def fake_retrieve_chunks(
         queries: list[str],
         booklet_ids: list[str],
+        adoev: int,
         *,
         top_k: int = 8,
     ) -> list[ChunkResult]:
+        assert adoev == 2024
         chunk_calls.append((queries, booklet_ids, top_k))
         if booklet_ids:
             return [filtered_duplicate]
@@ -67,6 +80,7 @@ async def test_retrieve_merges_global_chunks_and_updates_documents(
     chunks, documents = await service.retrieve(
         "TAO túlfizetés",
         ["tao befizetés visszaigénylés", "TAO túlfizetés"],
+        2024,
     )
 
     assert chunk_calls == [

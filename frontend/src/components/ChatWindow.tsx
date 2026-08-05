@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react';
-import type { ChatMessage } from '../types';
+import type { ChatMessage, TaxYear } from '../types';
+import { SUPPORTED_TAX_YEARS } from '../types';
 import { colors, spacing } from '../styles/theme';
 import MessageBubble from './MessageBubble';
 
 interface ChatWindowProps {
   messages: ChatMessage[];
   isLoading?: boolean;
+  awaitingTaxYear?: boolean;
+  onSelectTaxYear?: (year: TaxYear) => void;
 }
 
 const suggestions = [
@@ -14,7 +17,12 @@ const suggestions = [
   'Hogyan kell bejelenteni az alkalmazottat a NAV felé?',
 ];
 
-const ChatWindow = ({ messages, isLoading = false }: ChatWindowProps) => {
+const ChatWindow = ({
+  messages,
+  isLoading = false,
+  awaitingTaxYear = false,
+  onSelectTaxYear,
+}: ChatWindowProps) => {
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -68,6 +76,18 @@ const ChatWindow = ({ messages, isLoading = false }: ChatWindowProps) => {
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}
+        {awaitingTaxYear ? (
+          <div role="group" aria-label="Adóév kiválasztása" style={{ display: 'grid', gap: spacing[2] }}>
+            <strong>Melyik adóévre vonatkozik a kérdés?</strong>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: spacing[2] }}>
+              {SUPPORTED_TAX_YEARS.map((year) => (
+                <button key={year} type="button" onClick={() => onSelectTaxYear?.(year)}>
+                  {year}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div ref={endRef} />
       </div>
     </section>

@@ -128,6 +128,7 @@ for i in range(0, len(chunk_rows), EMBED_BATCH_SIZE):
             refs = json.loads(refs) if refs else []
         chunk_documents.append({
             "chunk_id": row["chunk_id"],
+            "adoev": int(row["adoev"]),
             "fuzet_szam": str(row["fuzet_szam"]),
             "fuzet_cim": row.get("fuzet_cim", ""),
             "breadcrumb": row.get("breadcrumb", ""),
@@ -160,6 +161,8 @@ for i in range(0, len(document_rows), EMBED_BATCH_SIZE):
 
     for row, emb in zip(batch, embeddings):
         doc_documents.append({
+            "document_id": row["document_id"],
+            "adoev": int(row["adoev"]),
             "fuzet_szam": str(row["fuzet_szam"]),
             "fuzet_cim": row.get("fuzet_cim", ""),
             "kozzeteve": row.get("kozzeteve", ""),
@@ -184,4 +187,3 @@ print("Uploading documents to AI Search...")
 upload_to_search(DOCUMENTS_INDEX_NAME, doc_documents)
 
 print("Embedding and indexing complete.")
-

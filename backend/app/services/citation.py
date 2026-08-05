@@ -14,20 +14,28 @@ def render_citation(chunk: ChunkResult) -> str:
 
 
 def format_citations(chunks: list[ChunkResult]) -> list[ChatSource]:
-    ranked_sources: dict[tuple[str, str, int, int, str], tuple[ChatSource, float]] = {}
+    ranked_sources: dict[
+        tuple[str, str, str, int, int, str], tuple[ChatSource, float]
+    ] = {}
     for chunk in sorted(chunks, key=lambda item: item.score, reverse=True):
         metadata = chunk.metadata
         fuzet_szam = str(metadata.get("fuzet_szam", ""))
         source = ChatSource(
+            adoev=int(metadata.get("adoev", 2026)),
             fuzet_szam=fuzet_szam,
             fuzet_cim=str(metadata.get("fuzet_cim", "")),
             page_from=int(metadata.get("page_from", 0)),
             page_to=int(metadata.get("page_to", metadata.get("page_from", 0))),
             breadcrumb=str(metadata.get("breadcrumb", "")),
-            url=f"/api/documents/{fuzet_szam}/pdf" if fuzet_szam else None,
+            url=(
+                f"/api/documents/{metadata.get('adoev', 2026)}/{fuzet_szam}/pdf"
+                if fuzet_szam
+                else None
+            ),
         )
         key = (
             source.fuzet_szam,
+            str(source.adoev),
             source.fuzet_cim,
             source.page_from,
             source.page_to,

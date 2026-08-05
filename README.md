@@ -2,6 +2,8 @@
 
 > ⚠️ **Arculati megjegyzés**: Ez a projekt saját, NAV-inspirált vizuális arculatot használ (kék/fehér színvilág). A hivatalos NAV logó és állami szimbólumok nem kerültek felhasználásra jogi megfontolásból.
 
+Az asszisztens a 2021–2026 közötti adóéveket támogatja. Az adóév kiválasztható a felületen; év nélküli kérdésnél a chatbot visszakérdez. Minden válasz saját adóév-jelvényt kap, ezért ugyanazon beszélgetésen belül is biztonságosan váltható az év.
+
 ## Architektúra
 
 ```mermaid
@@ -76,6 +78,12 @@ docker compose up
 azd auth login
 azd init
 azd up
+```
+
+Az API chatkérése kötelező `adoev` mezőt vár:
+
+```json
+{"message": "Mikor kell beadni a bevallást?", "adoev": 2024}
 ```
 
 ## Projekt struktúra

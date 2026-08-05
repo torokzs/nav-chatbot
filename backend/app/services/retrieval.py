@@ -8,7 +8,7 @@ from azure.search.documents.aio import SearchClient
 from azure.search.documents.models import QueryType, VectorizedQuery, VectorQuery
 
 from app.config import Settings, get_settings
-from app.models.schemas import ChunkResult, DocumentResult
+from app.models.schemas import ChunkResult, DocumentResult, TaxYear
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +60,16 @@ class RetrievalService:
         self,
         query: str,
         rewritten_queries: list[str],
+        adoev: TaxYear,
     ) -> tuple[list[ChunkResult], list[DocumentResult]]:
         queries = self._build_query_set(query, rewritten_queries)
-        document_results = await self._retrieve_documents(queries)
+        document_results = await self._retrieve_documents(queries, adoev)
         booklet_ids = [document.fuzet_szam for document in document_results if document.fuzet_szam]
 
-        chunk_results = await self._retrieve_chunks(queries, booklet_ids)
-        global_chunks = await self._retrieve_chunks(queries, [], top_k=_GLOBAL_CHUNK_TOP_K)
+        chunk_results = await self._retrieve_chunks(queries, booklet_ids, adoev)
+        global_chunks = await self._retrieve_chunks(
+            queries, [], adoev, top_k=_GLOBAL_CHUNK_TOP_K
+        )
 
         all_chunks = self._deduplicate_chunks([*chunk_results, *global_chunks])
         all_chunks.sort(key=lambda item: item.score, reverse=True)
@@ -83,6 +86,7 @@ class RetrievalService:
                 if str(chunk.metadata.get("fuzet_szam", "")) == booklet_id:
                     document_results.append(
                         DocumentResult(
+                            adoev=adoev,
                             fuzet_szam=booklet_id,
                             fuzet_cim=str(chunk.metadata.get("fuzet_cim", "")),
                             score=chunk.score,
@@ -103,9 +107,12 @@ class RetrievalService:
                 ordered.append(normalized)
         return ordered or [query]
 
-    async def _retrieve_documents(self, queries: list[str]) -> list[DocumentResult]:
+    async def _retrieve_documents(
+        self, queries: list[str], adoev: TaxYear
+    ) -> list[DocumentResult]:
         search_results = await self._documents_client.search(
             search_text=None,
+            filter=f"adoev eq {adoev}",
             top=_DOCUMENT_TOP_K,
             vector_queries=await self._build_vector_queries(
                 queries,
@@ -130,10 +137,11 @@ class RetrievalService:
         self,
         queries: list[str],
         booklet_ids: list[str],
+        adoev: TaxYear,
         *,
         top_k: int = _CHUNK_TOP_K,
     ) -> list[ChunkResult]:
-        filter_expression = self._build_booklet_filter(booklet_ids)
+        filter_expression = self._build_filter(booklet_ids, adoev)
         search_text = " ".join(queries)
         vector_queries = await self._build_vector_queries(
             queries,
@@ -167,6 +175,7 @@ class RetrievalService:
         self,
         booklet_ids: list[str],
         chunks: list[ChunkResult],
+        adoev: TaxYear,
     ) -> list[ChunkResult]:
         """Expand chunks to include sibling chunks from the same section.
 
@@ -181,7 +190,7 @@ class RetrievalService:
         if not booklet_ids or not section_prefixes:
             return []
 
-        filter_expression = self._build_section_filter(booklet_ids, section_prefixes)
+        filter_expression = self._build_section_filter(booklet_ids, section_prefixes, adoev)
         try:
             search_results = await self._chunks_client.search(
                 search_text="*",
@@ -229,6 +238,7 @@ class RetrievalService:
             fuzet_szam=str(
                 self._pick(payload, "fuzet_szam", "booklet_id", "document_id", default="")
             ),
+            adoev=self._tax_year(self._pick(payload, "adoev", default=2026)),
             fuzet_cim=str(
                 self._pick(payload, "fuzet_cim", "title", "document_title", default="")
             ),
@@ -243,6 +253,7 @@ class RetrievalService:
             self._pick(payload, "page_to", "page", "page_end", default=page_from)
         )
         metadata = {
+            "adoev": self._to_int(self._pick(payload, "adoev", default=2026)),
             "fuzet_szam": str(
                 self._pick(payload, "fuzet_szam", "booklet_id", "document_id", default="")
             ),
@@ -276,18 +287,24 @@ class RetrievalService:
                 return payload[key]
         return default
 
-    def _build_booklet_filter(self, booklet_ids: list[str]) -> str | None:
+    def _build_filter(self, booklet_ids: list[str], adoev: TaxYear) -> str:
         normalized = [
             self._escape_odata_value(booklet_id)
             for booklet_id in booklet_ids
             if booklet_id
         ]
+        year_filter = f"adoev eq {adoev}"
         if not normalized:
-            return None
-        return f"search.in(fuzet_szam, '{','.join(normalized)}', ',')"
+            return year_filter
+        return f"{year_filter} and search.in(fuzet_szam, '{','.join(normalized)}', ',')"
 
-    def _build_section_filter(self, booklet_ids: list[str], section_prefixes: Iterable[str]) -> str:
-        booklet_filter = self._build_booklet_filter(booklet_ids)
+    def _build_section_filter(
+        self,
+        booklet_ids: list[str],
+        section_prefixes: Iterable[str],
+        adoev: TaxYear,
+    ) -> str:
+        booklet_filter = self._build_filter(booklet_ids, adoev)
         # Use search.ismatch with wildcard for prefix matching (startswith not supported)
         prefix_filters = " or ".join(
             f"search.ismatch('{self._escape_odata_value(prefix)}*', 'breadcrumb')"
@@ -296,6 +313,12 @@ class RetrievalService:
         if booklet_filter:
             return f"({booklet_filter}) and ({prefix_filters})"
         return prefix_filters
+
+    def _tax_year(self, value: object) -> TaxYear:
+        year = self._to_int(value)
+        if year not in range(2021, 2027):
+            return 2026
+        return year  # type: ignore[return-value]
 
     def _section_prefix(self, breadcrumb: str) -> str:
         for separator in (" > ", " » ", "/"):
@@ -306,9 +329,10 @@ class RetrievalService:
         return breadcrumb.strip()
 
     def _deduplicate_chunks(self, chunks: list[ChunkResult]) -> list[ChunkResult]:
-        deduplicated: dict[tuple[str, str, int, int, str], ChunkResult] = {}
+        deduplicated: dict[tuple[str, str, str, int, int, str], ChunkResult] = {}
         for chunk in chunks:
             key = (
+                str(chunk.metadata.get("adoev", "")),
                 str(chunk.metadata.get("fuzet_szam", "")),
                 str(chunk.metadata.get("breadcrumb", "")),
                 self._to_int(chunk.metadata.get("page_from", 0)),
