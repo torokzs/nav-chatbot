@@ -31,7 +31,7 @@ jobs:
         run: pip install -r evals/requirements.txt
 
       - name: Test benchmark logic
-        run: pytest evals/tests -q
+        run: python -m pytest evals/tests -q
 
   backend:
     runs-on: ubuntu-latest
