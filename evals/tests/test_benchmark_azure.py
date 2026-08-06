@@ -4,6 +4,7 @@ import pytest
 
 from evals.benchmark_azure import (
     AzureCommandError,
+    build_revision_template,
     deployment_name,
     revision_suffix,
     validate_traffic_isolation,
@@ -57,3 +58,34 @@ def test_deployment_name_is_run_scoped_and_bounded() -> None:
 
 def test_revision_suffix_changes_between_run_attempts() -> None:
     assert revision_suffix("123456-1", 1) != revision_suffix("123456-2", 1)
+
+
+def test_build_revision_template_retargets_deployment_without_mutating_base() -> None:
+    revision = {
+        "properties": {
+            "template": {
+                "containers": [
+                    {
+                        "name": "backend",
+                        "env": [
+                            {
+                                "name": "AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT",
+                                "value": "production",
+                            }
+                        ],
+                    }
+                ],
+                "revisionSuffix": None,
+            }
+        }
+    }
+
+    template = build_revision_template(
+        revision,
+        deployment="benchmark-model",
+        suffix="b123-1",
+    )
+
+    assert template["revisionSuffix"] == "b123-1"
+    assert template["containers"][0]["env"][0]["value"] == "benchmark-model"
+    assert revision["properties"]["template"]["containers"][0]["env"][0]["value"] == "production"

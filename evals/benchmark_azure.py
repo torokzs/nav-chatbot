@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import time
 import urllib.parse
+from copy import deepcopy
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -147,28 +148,146 @@ def revision_suffix(run_id: str, index: int) -> str:
     return f"b{run_hash}-{index}"
 
 
+def _subscription_id() -> str:
+    account = run_az(["account", "show"])
+    subscription_id = str(account.get("id", "")) if isinstance(account, dict) else ""
+    if not subscription_id:
+        raise AzureCommandError("Azure subscription ID could not be resolved.")
+    return subscription_id
+
+
+def _container_app_url(
+    subscription_id: str,
+    resource_group: str,
+    container_app: str,
+) -> str:
+    return (
+        f"https://management.azure.com/subscriptions/{subscription_id}"
+        f"/resourceGroups/{resource_group}/providers/Microsoft.App"
+        f"/containerApps/{container_app}"
+    )
+
+
+def build_revision_template(
+    revision: Mapping[str, Any],
+    *,
+    deployment: str,
+    suffix: str,
+) -> dict[str, Any]:
+    properties = revision.get("properties")
+    template_value = properties.get("template") if isinstance(properties, Mapping) else None
+    if not isinstance(template_value, Mapping):
+        raise AzureCommandError("Base revision response is missing its template.")
+    template = deepcopy(dict(template_value))
+    containers_value = template.get("containers")
+    if not isinstance(containers_value, list) or not containers_value:
+        raise AzureCommandError("Base revision template has no containers.")
+
+    deployment_variable = "AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT"
+    updated = False
+    for container in containers_value:
+        if not isinstance(container, dict):
+            continue
+        env_value = container.get("env")
+        env = env_value if isinstance(env_value, list) else []
+        container["env"] = env
+        for variable in env:
+            if isinstance(variable, dict) and variable.get("name") == deployment_variable:
+                variable.pop("secretRef", None)
+                variable["value"] = deployment
+                updated = True
+    if not updated:
+        first_container = containers_value[0]
+        if not isinstance(first_container, dict):
+            raise AzureCommandError("Base revision template has an invalid container.")
+        env_value = first_container.get("env")
+        env = env_value if isinstance(env_value, list) else []
+        first_container["env"] = env
+        env.append({"name": deployment_variable, "value": deployment})
+    template["revisionSuffix"] = suffix
+    return template
+
+
+def create_revision(
+    *,
+    subscription_id: str,
+    resource_group: str,
+    container_app: str,
+    base_revision: str,
+    deployment: str,
+    suffix: str,
+) -> str:
+    app_url = _container_app_url(subscription_id, resource_group, container_app)
+    revision_url = f"{app_url}/revisions/{base_revision}?api-version=2024-03-01"
+    revision = run_az(["rest", "--method", "get", "--url", revision_url])
+    if not isinstance(revision, Mapping):
+        raise AzureCommandError(f"Base revision {base_revision} could not be read.")
+    template = build_revision_template(
+        revision,
+        deployment=deployment,
+        suffix=suffix,
+    )
+    run_az(
+        [
+            "rest",
+            "--method",
+            "patch",
+            "--url",
+            f"{app_url}?api-version=2024-03-01",
+            "--headers",
+            "Content-Type=application/json",
+            "--body",
+            json.dumps({"properties": {"template": template}}, separators=(",", ":")),
+        ]
+    )
+    return f"{container_app}--{suffix}"
+
+
+def deactivate_revision(
+    *,
+    subscription_id: str,
+    resource_group: str,
+    container_app: str,
+    revision: str,
+) -> None:
+    app_url = _container_app_url(subscription_id, resource_group, container_app)
+    run_az(
+        [
+            "rest",
+            "--method",
+            "post",
+            "--url",
+            f"{app_url}/revisions/{revision}/deactivate?api-version=2024-03-01",
+        ],
+        output_json=False,
+    )
+
+
 def wait_for_revision(
     resource_group: str,
     container_app: str,
     revision: str,
     *,
+    subscription_id: str | None = None,
     timeout_seconds: int = 600,
     interval_seconds: int = 10,
 ) -> str:
+    resolved_subscription_id = subscription_id or _subscription_id()
+    app_url = _container_app_url(
+        resolved_subscription_id,
+        resource_group,
+        container_app,
+    )
     deadline = time.monotonic() + timeout_seconds
     last_state = "unknown"
     while time.monotonic() < deadline:
         payload = run_az(
             [
-                "containerapp",
-                "revision",
-                "show",
-                "--resource-group",
-                resource_group,
-                "--name",
-                container_app,
-                "--revision",
-                revision,
+                "rest",
+                "--method",
+                "get",
+                "--url",
+                f"{app_url}/revisions/{revision}?api-version=2024-03-01",
             ]
         )
         properties = payload.get("properties", {}) if isinstance(payload, dict) else {}
@@ -197,6 +316,7 @@ def cleanup_registry(
     resource_group: str,
     ai_account: str,
     container_app: str,
+    subscription_id: str | None = None,
 ) -> list[str]:
     if not path.exists():
         return []
@@ -206,25 +326,18 @@ def cleanup_registry(
     deployments_value = payload.get("deployments", [])
     revisions = revisions_value if isinstance(revisions_value, list) else []
     deployments = deployments_value if isinstance(deployments_value, list) else []
+    resolved_subscription_id = subscription_id or _subscription_id()
     for revision_value in reversed(revisions.copy()):
         revision = str(revision_value)
         if not revision.startswith(f"{container_app}--b"):
             errors.append(f"Refusing to deactivate unscoped revision: {revision}")
             continue
         try:
-            run_az(
-                [
-                    "containerapp",
-                    "revision",
-                    "deactivate",
-                    "--resource-group",
-                    resource_group,
-                    "--name",
-                    container_app,
-                    "--revision",
-                    revision,
-                ],
-                output_json=False,
+            deactivate_revision(
+                subscription_id=resolved_subscription_id,
+                resource_group=resource_group,
+                container_app=container_app,
+                revision=revision,
             )
             revisions.remove(revision_value)
         except AzureCommandError as exc:

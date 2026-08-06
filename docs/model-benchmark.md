@@ -91,6 +91,10 @@ megköveteli, hogy a produkciós ingress explicit revízióra mutasson.
 mert az új benchmark-revízió különben éles forgalmat kaphatna. A benchmark
 soha nem ír át traffic weightet.
 
+A Container Apps revíziók létrehozása, állapotellenőrzése és deaktiválása
+közvetlen ARM REST-hívással történik, ezért a futás nem függ a `containerapp`
+Azure CLI extension verziójától.
+
 Az operátori ellenőrzéshez a `--preflight-only` kapcsoló a teljes modell-,
 SKU-, quota- és Retail Price felderítést, valamint a költségkaput lefuttatja,
 de nem hoz létre deploymentet és nem indít fizetős modellhívást.

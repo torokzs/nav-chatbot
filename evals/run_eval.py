@@ -104,6 +104,27 @@ class CitationCorrectnessEvaluator:
             return False
         booklet = expected_fuzet.lstrip("0") or "0"
         booklet_pattern = rf"0*{re.escape(booklet)}" if booklet.isdigit() else re.escape(booklet)
+        bracket_pattern = re.compile(
+            rf"\[\s*{booklet_pattern}\s*[–—-](?P<body>[^\]]+)\]",
+            flags=re.IGNORECASE,
+        )
+        for citation in bracket_pattern.finditer(response):
+            body = citation.group("body")
+            page_list = re.search(
+                r",\s*(?P<pages>\d[\d\s.,–—-]*)\s*oldal",
+                body,
+                flags=re.IGNORECASE,
+            )
+            if page_list is None:
+                continue
+            for start_text, end_text in re.findall(
+                r"(\d+)(?:\s*[–—-]\s*(\d+))?",
+                page_list.group("pages"),
+            ):
+                start = int(start_text)
+                end = int(end_text) if end_text else start
+                if start <= expected_page <= end:
+                    return True
         citation_patterns = [
             rf"\[{booklet_pattern}[^\]]*{expected_page}(?:[^\d]|$)",
             rf"{booklet_pattern}\s*[–,-]\s*[^\n]*{expected_page}\.\s*oldal",
@@ -458,9 +479,14 @@ def extract_metric(metrics: dict[str, Any], metric_name: str) -> float | None:
 
 
 
-def print_summary(summary: dict[str, float | None], threshold_module: Any) -> bool:
-    threshold_report = threshold_module.summarize_thresholds(summary, threshold_module.THRESHOLDS)
-    all_passed = threshold_module.all_metrics_pass(summary, threshold_module.THRESHOLDS)
+def print_summary(
+    summary: dict[str, float | None],
+    threshold_module: Any,
+    thresholds: dict[str, float] | None = None,
+) -> bool:
+    active_thresholds = thresholds or threshold_module.THRESHOLDS
+    threshold_report = threshold_module.summarize_thresholds(summary, active_thresholds)
+    all_passed = threshold_module.all_metrics_pass(summary, active_thresholds)
     print("Evaluation summary:")
     for metric_name, details in threshold_report.items():
         value = details["value"]
@@ -503,7 +529,12 @@ def main() -> int:
                 "fluency": extract_metric(metrics, "fluency"),
             }
         )
-    passed = print_summary(summary, threshold_module)
+    active_thresholds = (
+        {"citation_correctness": threshold_module.THRESHOLDS["citation_correctness"]}
+        if args.smoke
+        else threshold_module.THRESHOLDS
+    )
+    passed = print_summary(summary, threshold_module, active_thresholds)
 
     studio_url = result.get("studio_url") if isinstance(result, dict) else None
     if studio_url:

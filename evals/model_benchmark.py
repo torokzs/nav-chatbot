@@ -15,6 +15,8 @@ import httpx
 from benchmark_azure import (
     AzureCommandError,
     cleanup_registry,
+    create_revision,
+    deactivate_revision,
     deployment_name,
     fetch_retail_prices,
     revision_suffix,
@@ -324,35 +326,6 @@ def _create_deployment(
     run_az(command)
 
 
-def _create_revision(
-    *,
-    resource_group: str,
-    container_app: str,
-    base_revision: str,
-    deployment: str,
-    suffix: str,
-) -> str:
-    revision = f"{container_app}--{suffix}"
-    run_az(
-        [
-            "containerapp",
-            "revision",
-            "copy",
-            "--resource-group",
-            resource_group,
-            "--name",
-            container_app,
-            "--from-revision",
-            base_revision,
-            "--revision-suffix",
-            suffix,
-            "--set-env-vars",
-            f"AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT={deployment}",
-        ]
-    )
-    return revision
-
-
 def _cleanup_candidate(
     *,
     registry: dict[str, Any],
@@ -362,23 +335,16 @@ def _cleanup_candidate(
     resource_group: str,
     container_app: str,
     ai_account: str,
+    subscription_id: str,
 ) -> list[str]:
     errors: list[str] = []
     if revision:
         try:
-            run_az(
-                [
-                    "containerapp",
-                    "revision",
-                    "deactivate",
-                    "--resource-group",
-                    resource_group,
-                    "--name",
-                    container_app,
-                    "--revision",
-                    revision,
-                ],
-                output_json=False,
+            deactivate_revision(
+                subscription_id=subscription_id,
+                resource_group=resource_group,
+                container_app=container_app,
+                revision=revision,
             )
             registry["revisions"].remove(revision)
         except (AzureCommandError, ValueError) as exc:
@@ -520,6 +486,7 @@ def _candidate_cost(
 def run_benchmark(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     registry = {"run_id": args.run_id, "deployments": [], "revisions": []}
+    subscription_id: str | None = None
     write_registry(args.registry, registry)
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -832,7 +799,8 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 write_registry(args.registry, registry)
 
                 suffix = revision_suffix(args.run_id, index)
-                revision = _create_revision(
+                revision = create_revision(
+                    subscription_id=subscription_id,
                     resource_group=args.resource_group,
                     container_app=args.container_app,
                     base_revision=base_revision,
@@ -845,6 +813,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                     args.resource_group,
                     args.container_app,
                     revision,
+                    subscription_id=subscription_id,
                 )
                 question_rows, eval_rows = _run_questions(
                     endpoint,
@@ -890,6 +859,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                         resource_group=args.resource_group,
                         container_app=args.container_app,
                         ai_account=args.ai_account,
+                        subscription_id=subscription_id,
                     )
                 )
                 report["candidates"][-1] = candidate_result.to_dict()
@@ -934,6 +904,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 resource_group=args.resource_group,
                 ai_account=args.ai_account,
                 container_app=args.container_app,
+                subscription_id=subscription_id,
             )
         )
         report["finished_at"] = _iso_now()
