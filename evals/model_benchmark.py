@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import secrets
 import sys
 import time
 from datetime import UTC, datetime
@@ -31,6 +32,7 @@ from benchmark_core import (
     ModelCandidate,
     TokenPrice,
     apply_account_quota,
+    build_focused_shortlist,
     build_shortlist,
     estimate_preflight_cost,
     normalize_retail_price,
@@ -102,6 +104,23 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=100,
         help="Number of deterministic leading dataset questions to benchmark (1-100).",
+    )
+    run_parser.add_argument(
+        "--candidate-models",
+        default=os.getenv("BENCHMARK_CANDIDATE_MODELS", ""),
+        help=(
+            "Comma-separated exact model names for focused comparison. "
+            "Empty uses the family-based catalog shortlist."
+        ),
+    )
+    run_parser.add_argument(
+        "--dynamic-model-max-cost-per-question-usd",
+        type=float,
+        default=1.0,
+        help=(
+            "Conservative generation cost ceiling for dynamic routers whose "
+            "underlying model determines billing."
+        ),
     )
     run_parser.add_argument(
         "--base-revision",
@@ -404,6 +423,8 @@ def _cleanup_candidate(
 def _run_questions(
     endpoint: str,
     dataset: list[dict[str, Any]],
+    frozen_contexts: list[dict[str, Any]],
+    benchmark_token: str,
     output_path: Path,
     requests_per_minute: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -423,7 +444,15 @@ def _run_questions(
             adoev = int(row["adoev"])
             LOGGER.info("[%d/%d] %s", index, len(dataset), question)
             try:
-                result = call_chat_endpoint(client, endpoint, question, adoev)
+                frozen = frozen_contexts[index - 1]
+                result = call_chat_endpoint(
+                    client,
+                    endpoint,
+                    question,
+                    adoev,
+                    evaluation_context=list(frozen["evaluation_context"]),
+                    benchmark_token=benchmark_token,
+                )
                 question_results.append(
                     {
                         "index": index,
@@ -476,6 +505,53 @@ def _run_questions(
     return question_results, eval_rows
 
 
+def _prefetch_contexts(
+    endpoint: str,
+    dataset: list[dict[str, Any]],
+    output_path: Path,
+) -> list[dict[str, Any]]:
+    contexts: list[dict[str, Any]] = []
+    timeout = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=30.0)
+    with httpx.Client(
+        timeout=timeout,
+        headers={"Accept": "text/event-stream"},
+    ) as client:
+        for index, row in enumerate(dataset, start=1):
+            question = str(row["question"])
+            LOGGER.info(
+                "[retrieval %d/%d] %s",
+                index,
+                len(dataset),
+                question,
+            )
+            result = call_chat_endpoint(
+                client,
+                endpoint,
+                question,
+                int(row["adoev"]),
+                retrieval_only=True,
+            )
+            if not result.evaluation_context:
+                raise RuntimeError(
+                    f"Retrieval returned no context for question {index}."
+                )
+            contexts.append(
+                {
+                    "index": index,
+                    "question": question,
+                    "adoev": int(row["adoev"]),
+                    "evaluation_context": result.evaluation_context,
+                    "sources": result.sources,
+                }
+            )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(contexts, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return contexts
+
+
 def _quality_metrics(eval_rows: list[dict[str, Any]], candidate_dir: Path) -> dict[str, float | None]:
     eval_input = candidate_dir / "evaluation_input.jsonl"
     eval_output = candidate_dir / "evaluation_results.json"
@@ -500,9 +576,14 @@ def _candidate_cost(
         for row in question_rows
         if isinstance(row.get("output_tokens"), int)
     )
-    generation = candidate.price.estimate(
-        len(question_rows) * args.input_tokens_per_question,
-        output_tokens,
+    generation = (
+        len(question_rows)
+        * args.dynamic_model_max_cost_per_question_usd
+        if candidate.family == "router"
+        else candidate.price.estimate(
+            len(question_rows) * args.input_tokens_per_question,
+            output_tokens,
+        )
     )
     judge = len(question_rows) * 3 * judge_price.estimate(
         args.judge_input_tokens_per_evaluation,
@@ -531,6 +612,14 @@ def run_benchmark(args: argparse.Namespace) -> int:
             "judge_deployment": args.judge_deployment,
             "deployment_capacity": args.deployment_capacity,
             "question_count": args.question_count,
+            "candidate_models": [
+                name.strip()
+                for name in args.candidate_models.split(",")
+                if name.strip()
+            ],
+            "dynamic_model_max_cost_per_question_usd": (
+                args.dynamic_model_max_cost_per_question_usd
+            ),
             "dataset": str(args.dataset),
             "thresholds": QUALITY_THRESHOLDS,
             "token_accounting": (
@@ -554,6 +643,10 @@ def run_benchmark(args: argparse.Namespace) -> int:
             raise ValueError("deployment_capacity must be greater than zero.")
         if args.requests_per_minute <= 0:
             raise ValueError("requests_per_minute must be greater than zero.")
+        if args.dynamic_model_max_cost_per_question_usd <= 0:
+            raise ValueError(
+                "dynamic_model_max_cost_per_question_usd must be greater than zero."
+            )
         full_dataset = load_dataset(args.dataset)
         if len(full_dataset) != 100:
             raise ValueError(
@@ -662,7 +755,38 @@ def run_benchmark(args: argparse.Namespace) -> int:
         with httpx.Client() as price_client:
             price_items = fetch_retail_prices(price_client, location=args.location)
         _assign_prices(candidates, price_items, args.location)
-        shortlist = build_shortlist(candidates)
+        requested_models = [
+            name.strip()
+            for name in args.candidate_models.split(",")
+            if name.strip()
+        ]
+        shortlist = (
+            build_focused_shortlist(candidates, requested_models)
+            if requested_models
+            else build_shortlist(candidates)
+        )
+        for slot in shortlist:
+            candidate = slot.candidate
+            if (
+                candidate is not None
+                and candidate.family == "router"
+            ):
+                assumed_tokens = (
+                    args.input_tokens_per_question
+                    + args.output_tokens_per_question
+                )
+                rate = (
+                    args.dynamic_model_max_cost_per_question_usd
+                    * 1_000_000
+                    / assumed_tokens
+                )
+                candidate.price = TokenPrice(
+                    input_per_million_usd=rate,
+                    output_per_million_usd=rate,
+                    source_meters=(
+                        "operator ceiling: dynamic router underlying model",
+                    ),
+                )
 
         judge_deployment = run_az(
             [
@@ -868,6 +992,19 @@ def run_benchmark(args: argparse.Namespace) -> int:
             os.environ["AZURE_AI_PROJECT_URL"] = args.project_url
 
         report["status"] = "running"
+        base_endpoint = wait_for_revision(
+            args.resource_group,
+            args.container_app,
+            base_revision,
+            subscription_id=subscription_id,
+        )
+        frozen_contexts = _prefetch_contexts(
+            base_endpoint,
+            dataset,
+            args.output_dir / "frozen_retrieval_contexts.json",
+        )
+        benchmark_token = secrets.token_urlsafe(32)
+        report["config"]["retrieval_mode"] = "prefetched_once"
         for index, candidate in enumerate(selected, start=1):
             deployment: str | None = None
             revision: str | None = None
@@ -885,12 +1022,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
             candidate_dir = args.output_dir / f"{index:02d}-{candidate.slot}"
             try:
                 if candidate.slot == "current-model":
-                    endpoint = wait_for_revision(
-                        args.resource_group,
-                        args.container_app,
-                        base_revision,
-                        subscription_id=subscription_id,
-                    )
+                    revision_deployment = current_deployment
                 else:
                     deployment_to_create = deployment_name(
                         args.run_id,
@@ -906,27 +1038,32 @@ def run_benchmark(args: argparse.Namespace) -> int:
                     deployment = deployment_to_create
                     registry["deployments"].append(deployment)
                     write_registry(args.registry, registry)
-
-                    suffix = revision_suffix(args.run_id, index)
-                    revision = create_revision(
-                        subscription_id=subscription_id,
-                        resource_group=args.resource_group,
-                        container_app=args.container_app,
-                        base_revision=base_revision,
-                        deployment=deployment,
-                        suffix=suffix,
-                    )
-                    registry["revisions"].append(revision)
-                    write_registry(args.registry, registry)
-                    endpoint = wait_for_revision(
-                        args.resource_group,
-                        args.container_app,
-                        revision,
-                        subscription_id=subscription_id,
-                    )
+                    revision_deployment = deployment
+                suffix = revision_suffix(args.run_id, index)
+                revision = create_revision(
+                    subscription_id=subscription_id,
+                    resource_group=args.resource_group,
+                    container_app=args.container_app,
+                    base_revision=base_revision,
+                    deployment=revision_deployment,
+                    suffix=suffix,
+                    environment_overrides={
+                        "BENCHMARK_CONTEXT_TOKEN": benchmark_token,
+                    },
+                )
+                registry["revisions"].append(revision)
+                write_registry(args.registry, registry)
+                endpoint = wait_for_revision(
+                    args.resource_group,
+                    args.container_app,
+                    revision,
+                    subscription_id=subscription_id,
+                )
                 question_rows, eval_rows = _run_questions(
                     endpoint,
                     dataset,
+                    frozen_contexts,
+                    benchmark_token,
                     candidate_dir / "questions.json",
                     args.requests_per_minute,
                 )

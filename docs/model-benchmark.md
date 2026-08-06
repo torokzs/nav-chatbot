@@ -104,11 +104,27 @@ determinista kérdésszámot választ. Az 5 kérdéses gyors mód az első öt k
 kérdést használja, ezért futások között közvetlenül összehasonlítható; az ilyen
 kis minta iránymutató, nem helyettesíti a teljes minőségi benchmarkot.
 
+A `candidate_models` alapértéke `model-router`, így a workflow a base revision
+aktuális deploymentjét hasonlítja össze a valódi Azure Model Routerrel. Vesszővel
+további pontos katalógusmodell-nevek adhatók meg; üres érték visszakapcsolja a
+teljes családalapú shortlistet. A dinamikus router tényleges díja a választott
+almodelltől függ, ezért a preflight az operátor által megadott
+`dynamic_model_max_cost_per_question_usd` plafont használja.
+
 PR előtti méréshez a `base_revision` inputtal megadható egy előzőleg
 deployolt, egészséges, 0%-os forgalmú branch-revízió. Így a benchmark a friss
 backend-kódot méri, miközben a produkciós traffic rule változatlan marad.
 Ennek a revíziónak az aktuális chat deploymentje mindig külön
 `current-model` baseline jelöltként fut, ideiglenes deployment létrehozása nélkül.
+
+A retrieval modellfüggetlen: a query rewrite után az embedding deployment és az
+Azure AI Search végzi. A benchmark ezért kérdésenként egyszer, a base revisionön
+futtatja, majd ugyanazt a befagyasztott kontextust adja minden jelölt run-scoped,
+titokkal védett revíziójának. A normál chat nem fogad el context override-ot.
+
+Az `evals/qa.jsonl` és `evals/qa.smoke.jsonl` kizárólag 2026-os ground truthot
+tartalmaz. Ezt az `adoev` és `ground_truth_tax_year` mező is explicit jelzi; a
+füzet- és oldalhivatkozások a 2026-os Azure Search indexhez vannak igazítva.
 
 ## Metrikák és rangsorolás
 

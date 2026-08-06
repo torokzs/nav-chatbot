@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import os
@@ -11,7 +12,13 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.middleware.input_guard import guard_chat_request
 from app.middleware.rate_limit import enforce_rate_limit
-from app.models.schemas import ChatEvent, ChatRequest
+from app.models.schemas import (
+    ChatEvent,
+    ChatRequest,
+    ChunkResult,
+    DocumentResult,
+    TaxYear,
+)
 from app.services.citation import format_citations
 from app.services.llm import LLMService
 from app.services.query_rewrite import rewrite_query
@@ -36,6 +43,27 @@ def _to_sse_message(event: ChatEvent) -> dict[str, str]:
     }
 
 
+def _documents_from_chunks(
+    chunks: list[ChunkResult],
+    adoev: TaxYear,
+) -> list[DocumentResult]:
+    documents: dict[str, DocumentResult] = {}
+    for chunk in chunks:
+        booklet = str(chunk.metadata.get("fuzet_szam", "")).strip()
+        if not booklet:
+            continue
+        score = chunk.score
+        existing = documents.get(booklet)
+        if existing is None or score > existing.score:
+            documents[booklet] = DocumentResult(
+                adoev=adoev,
+                fuzet_szam=booklet,
+                fuzet_cim=str(chunk.metadata.get("fuzet_cim", "")),
+                score=score,
+            )
+    return sorted(documents.values(), key=lambda item: item.score, reverse=True)
+
+
 @router.get("/api/documents/{adoev}/{fuzet_szam}/pdf")
 async def get_document_pdf(adoev: int, fuzet_szam: str) -> FileResponse:
     """Serve a NAV booklet PDF by its number."""
@@ -58,19 +86,36 @@ async def get_document_pdf(adoev: int, fuzet_szam: str) -> FileResponse:
 
 @router.post("/api/chat", response_class=EventSourceResponse)
 async def stream_chat(
+    request: Request,
     payload: ChatRequest = Depends(guard_chat_request),  # noqa: B008
     _: None = Depends(enforce_rate_limit),  # noqa: B008
     retrieval_service: RetrievalService = Depends(get_retrieval_service),  # noqa: B008
     llm_service: LLMService = Depends(get_llm_service),  # noqa: B008
 ) -> EventSourceResponse:
+    if payload.evaluation_context is not None:
+        expected_token = os.environ.get("BENCHMARK_CONTEXT_TOKEN", "")
+        supplied_token = request.headers.get("x-benchmark-context-token", "")
+        if not expected_token or not hmac.compare_digest(
+            supplied_token,
+            expected_token,
+        ):
+            raise HTTPException(status_code=403, detail="Invalid benchmark context token")
+
     async def event_stream() -> AsyncGenerator[dict[str, str], None]:
         try:
-            rewritten_queries = rewrite_query(payload.message)
-            context_chunks, source_documents = await retrieval_service.retrieve(
-                payload.message,
-                rewritten_queries,
-                payload.adoev,
-            )
+            if payload.evaluation_context is None:
+                rewritten_queries = rewrite_query(payload.message)
+                context_chunks, source_documents = await retrieval_service.retrieve(
+                    payload.message,
+                    rewritten_queries,
+                    payload.adoev,
+                )
+            else:
+                context_chunks = payload.evaluation_context
+                source_documents = _documents_from_chunks(
+                    context_chunks,
+                    payload.adoev,
+                )
 
             if payload.include_evaluation_context:
                 yield _to_sse_message(
@@ -80,11 +125,26 @@ async def stream_chat(
                             {
                                 "content": chunk.content,
                                 "metadata": chunk.metadata,
+                                "score": chunk.score,
                             }
                             for chunk in context_chunks
                         ],
                     )
                 )
+
+            if payload.evaluation_retrieval_only:
+                citations = format_citations(context_chunks)
+                yield _to_sse_message(
+                    ChatEvent(
+                        type="sources",
+                        content=[
+                            citation.model_dump(mode="json")
+                            for citation in citations
+                        ],
+                    )
+                )
+                yield _to_sse_message(ChatEvent(type="done", content=None))
+                return
 
             async for token in llm_service.generate_response(
                 payload.message,

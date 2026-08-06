@@ -93,6 +93,8 @@ def _compact(value: str) -> str:
 
 def detect_family(model_name: str, model_format: str = "") -> str | None:
     value = f"{model_name} {model_format}".lower()
+    if _normalized(model_name) == "model-router":
+        return "router"
     if "claude" in value or "anthropic" in value:
         return "claude"
     if "mistral" in value or "ministral" in value:
@@ -117,7 +119,6 @@ def _is_chat_candidate(model_name: str) -> bool:
         "deep-research",
         "embedding",
         "image",
-        "model-router",
         "realtime",
         "search-preview",
         "transcribe",
@@ -347,6 +348,58 @@ def build_shortlist(candidates: Sequence[ModelCandidate]) -> list[SlotResult]:
         candidate.slot = slot
         selected.add(candidate.name.lower())
         results.append(SlotResult(slot=slot, status="selected", candidate=candidate))
+    return results
+
+
+def build_focused_shortlist(
+    candidates: Sequence[ModelCandidate],
+    model_names: Sequence[str],
+) -> list[SlotResult]:
+    results: list[SlotResult] = []
+    selected: set[str] = set()
+    sku_order = {"globalstandard": 0, "datazonestandard": 1, "standard": 2}
+    for index, requested_name in enumerate(model_names, start=1):
+        normalized_name = requested_name.strip().casefold()
+        if normalized_name in selected:
+            results.append(
+                SlotResult(
+                    slot=f"comparison-{index}",
+                    status="skipped",
+                    reason=f"Requested model {requested_name!r} is duplicated.",
+                )
+            )
+            continue
+        available = [
+            candidate
+            for candidate in candidates
+            if candidate.name.casefold() == normalized_name
+            and candidate.deployment_capacity > 0
+        ]
+        if not available:
+            results.append(
+                SlotResult(
+                    slot=f"comparison-{index}",
+                    status="skipped",
+                    reason=f"Requested model {requested_name!r} is unavailable or has no quota.",
+                )
+            )
+            continue
+        candidate = min(
+            available,
+            key=lambda item: (
+                tuple(-part for part in _version_key(item.version)),
+                sku_order.get(_compact(item.sku), 10),
+            ),
+        )
+        candidate.slot = f"comparison-{index}"
+        selected.add(normalized_name)
+        results.append(
+            SlotResult(
+                slot=candidate.slot,
+                status="selected",
+                candidate=candidate,
+            )
+        )
     return results
 
 

@@ -51,7 +51,17 @@ on:
       question_count:
         description: Number of deterministic benchmark questions to run (1-100)
         required: true
-        default: '100'
+        default: '5'
+        type: string
+      candidate_models:
+        description: Comma-separated exact models; empty uses the full catalog shortlist
+        required: false
+        default: 'model-router'
+        type: string
+      dynamic_model_max_cost_per_question_usd:
+        description: Cost ceiling per question for dynamic routers
+        required: true
+        default: '1'
         type: string
       base_revision:
         description: Optional healthy zero-traffic backend revision to benchmark
@@ -131,6 +141,8 @@ jobs:
             --max-estimated-cost-usd "${{ inputs.max_estimated_cost_usd }}" \
             --deployment-capacity "${{ inputs.deployment_capacity }}" \
             --question-count "${{ inputs.question_count }}" \
+            --candidate-models "${{ inputs.candidate_models }}" \
+            --dynamic-model-max-cost-per-question-usd "${{ inputs.dynamic_model_max_cost_per_question_usd }}" \
             --base-revision "${{ inputs.base_revision }}" \
             --output-dir "$BENCHMARK_OUTPUT_DIR" \
             --registry "$BENCHMARK_REGISTRY"

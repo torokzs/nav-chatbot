@@ -134,6 +134,104 @@ async def test_chat_endpoint_includes_context_only_when_requested(
         "done",
     ]
     assert events[0]["content"][0]["content"] == "Az SZJA bevallás határideje május 20."
+    assert events[0]["content"][0]["score"] == 0.99
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_retrieval_only_skips_generation(
+    mock_settings: Settings,
+) -> None:
+    _reset_sse_app_status()
+    app = create_app()
+    app.state.settings = mock_settings
+    app.state.retrieval_service = FakeRetrievalService()
+    app.state.llm_service = FakeLLMService()
+    app.dependency_overrides[get_settings] = lambda: mock_settings
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client, client.stream(
+        "POST",
+        "/api/chat",
+        json={
+            "message": "Mikor kell beadni az SZJA bevallást?",
+            "adoev": 2026,
+            "include_evaluation_context": True,
+            "evaluation_retrieval_only": True,
+        },
+    ) as response:
+        events = [
+            json.loads(line.removeprefix("data: "))
+            async for line in response.aiter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert [event["type"] for event in events] == ["context", "sources", "done"]
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_context_override_requires_run_token(
+    mock_settings: Settings,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _reset_sse_app_status()
+    monkeypatch.setenv("BENCHMARK_CONTEXT_TOKEN", "run-secret")
+    app = create_app()
+    app.state.settings = mock_settings
+    app.state.retrieval_service = FakeRetrievalService(should_fail=True)
+    app.state.llm_service = FakeLLMService()
+    app.dependency_overrides[get_settings] = lambda: mock_settings
+    context = [
+        {
+            "content": "Az SZJA bevallás határideje május 20.",
+            "metadata": {
+                "adoev": 2026,
+                "fuzet_szam": "1",
+                "fuzet_cim": "SZJA információk",
+                "page_from": 10,
+                "page_to": 10,
+                "breadcrumb": "Bevallás > Határidők",
+            },
+            "score": 0.99,
+        }
+    ]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        forbidden = await client.post(
+            "/api/chat",
+            json={
+                "message": "Mikor kell beadni az SZJA bevallást?",
+                "adoev": 2026,
+                "evaluation_context": context,
+            },
+        )
+        async with client.stream(
+            "POST",
+            "/api/chat",
+            headers={"x-benchmark-context-token": "run-secret"},
+            json={
+                "message": "Mikor kell beadni az SZJA bevallást?",
+                "adoev": 2026,
+                "evaluation_context": context,
+            },
+        ) as response:
+            events = [
+                json.loads(line.removeprefix("data: "))
+                async for line in response.aiter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert forbidden.status_code == 403
+    assert [event["type"] for event in events] == [
+        "token",
+        "token",
+        "sources",
+        "done",
+    ]
 
 
 @pytest.mark.asyncio

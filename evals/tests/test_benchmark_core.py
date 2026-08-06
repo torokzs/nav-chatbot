@@ -8,6 +8,7 @@ from evals.benchmark_core import (
     ModelCandidate,
     TokenPrice,
     apply_account_quota,
+    build_focused_shortlist,
     build_shortlist,
     estimate_preflight_cost,
     normalize_retail_price,
@@ -79,6 +80,34 @@ def test_shortlist_documents_unavailable_family_as_skipped() -> None:
     assert "mistral" in skipped
     assert "deepseek" in skipped
     assert skipped["mistral"].reason
+
+
+def test_focused_shortlist_selects_latest_requested_router() -> None:
+    older = candidate("model-router", "router")
+    older.version = "2025-08-07"
+    latest = candidate("model-router", "router")
+    latest.version = "2025-11-18"
+
+    shortlist = build_focused_shortlist(
+        [older, latest],
+        ["model-router"],
+    )
+
+    assert shortlist[0].candidate is latest
+    assert shortlist[0].slot == "comparison-1"
+
+
+def test_focused_shortlist_skips_duplicate_model_names() -> None:
+    router = candidate("model-router", "router")
+
+    shortlist = build_focused_shortlist(
+        [router],
+        ["model-router", "MODEL-ROUTER"],
+    )
+
+    assert shortlist[0].status == "selected"
+    assert shortlist[1].status == "skipped"
+    assert shortlist[1].reason and "duplicated" in shortlist[1].reason
 
 
 @pytest.mark.parametrize("lifecycle_status", ["Deprecated", "Deprecating"])

@@ -85,10 +85,15 @@ def test_build_revision_template_retargets_deployment_without_mutating_base() ->
         revision,
         deployment="benchmark-model",
         suffix="b123-1",
+        environment_overrides={"BENCHMARK_CONTEXT_TOKEN": "run-secret"},
     )
 
     assert template["revisionSuffix"] == "b123-1"
     assert template["containers"][0]["env"][0]["value"] == "benchmark-model"
+    assert template["containers"][0]["env"][1] == {
+        "name": "BENCHMARK_CONTEXT_TOKEN",
+        "value": "run-secret",
+    }
     assert revision["properties"]["template"]["containers"][0]["env"][0]["value"] == "production"
 
 

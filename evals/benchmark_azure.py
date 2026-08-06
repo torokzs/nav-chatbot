@@ -173,6 +173,7 @@ def build_revision_template(
     *,
     deployment: str,
     suffix: str,
+    environment_overrides: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     properties = revision.get("properties")
     template_value = properties.get("template") if isinstance(properties, Mapping) else None
@@ -183,8 +184,11 @@ def build_revision_template(
     if not isinstance(containers_value, list) or not containers_value:
         raise AzureCommandError("Base revision template has no containers.")
 
-    deployment_variable = "AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT"
-    updated = False
+    overrides = {
+        "AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT": deployment,
+        **(environment_overrides or {}),
+    }
+    updated: set[str] = set()
     for container in containers_value:
         if not isinstance(container, dict):
             continue
@@ -192,18 +196,20 @@ def build_revision_template(
         env = env_value if isinstance(env_value, list) else []
         container["env"] = env
         for variable in env:
-            if isinstance(variable, dict) and variable.get("name") == deployment_variable:
+            name = str(variable.get("name", "")) if isinstance(variable, dict) else ""
+            if isinstance(variable, dict) and name in overrides:
                 variable.pop("secretRef", None)
-                variable["value"] = deployment
-                updated = True
-    if not updated:
-        first_container = containers_value[0]
-        if not isinstance(first_container, dict):
-            raise AzureCommandError("Base revision template has an invalid container.")
-        env_value = first_container.get("env")
-        env = env_value if isinstance(env_value, list) else []
-        first_container["env"] = env
-        env.append({"name": deployment_variable, "value": deployment})
+                variable["value"] = overrides[name]
+                updated.add(name)
+    first_container = containers_value[0]
+    if not isinstance(first_container, dict):
+        raise AzureCommandError("Base revision template has an invalid container.")
+    env_value = first_container.get("env")
+    env = env_value if isinstance(env_value, list) else []
+    first_container["env"] = env
+    for name, value in overrides.items():
+        if name not in updated:
+            env.append({"name": name, "value": value})
     template["revisionSuffix"] = suffix
     return template
 
@@ -216,6 +222,7 @@ def create_revision(
     base_revision: str,
     deployment: str,
     suffix: str,
+    environment_overrides: Mapping[str, str] | None = None,
 ) -> str:
     app_url = _container_app_url(subscription_id, resource_group, container_app)
     revision_url = f"{app_url}/revisions/{base_revision}?api-version=2024-03-01"
@@ -226,6 +233,7 @@ def create_revision(
         revision,
         deployment=deployment,
         suffix=suffix,
+        environment_overrides=environment_overrides,
     )
     run_az(
         [

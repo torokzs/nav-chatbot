@@ -203,7 +203,14 @@ def parse_sse_payload(line: str) -> dict[str, Any] | None:
 
 
 def call_chat_endpoint(
-    client: httpx.Client, endpoint: str, question: str, adoev: int
+    client: httpx.Client,
+    endpoint: str,
+    question: str,
+    adoev: int,
+    *,
+    evaluation_context: list[dict[str, Any]] | None = None,
+    retrieval_only: bool = False,
+    benchmark_token: str | None = None,
 ) -> ChatRunResult:
     url = build_chat_url(endpoint)
     response_text_parts: list[str] = []
@@ -213,14 +220,24 @@ def call_chat_endpoint(
     first_token_at: float | None = None
 
     LOGGER.debug("Calling %s", url)
+    payload: dict[str, Any] = {
+        "message": question,
+        "adoev": adoev,
+        "include_evaluation_context": True,
+        "evaluation_retrieval_only": retrieval_only,
+    }
+    if evaluation_context is not None:
+        payload["evaluation_context"] = evaluation_context
+    headers = (
+        {"x-benchmark-context-token": benchmark_token}
+        if benchmark_token
+        else None
+    )
     with client.stream(
         "POST",
         url,
-        json={
-            "message": question,
-            "adoev": adoev,
-            "include_evaluation_context": True,
-        },
+        json=payload,
+        headers=headers,
     ) as response:
         response.raise_for_status()
         for line in response.iter_lines():
@@ -245,7 +262,7 @@ def call_chat_endpoint(
                 break
 
     answer = "".join(response_text_parts).strip()
-    if not answer:
+    if not answer and not retrieval_only:
         raise RuntimeError("The backend returned an empty answer.")
     completed = time.perf_counter()
     output_tokens = len(tiktoken.get_encoding("cl100k_base").encode(answer))
