@@ -98,9 +98,6 @@ jobs:
       - name: Install benchmark dependencies
         run: pip install -r evals/requirements.txt
 
-      - name: Install Container Apps CLI extension
-        run: az extension add --name containerapp --upgrade --only-show-errors
-
       - name: Validate configuration
         shell: bash
         run: |

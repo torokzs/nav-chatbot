@@ -326,7 +326,11 @@ def cleanup_registry(
     deployments_value = payload.get("deployments", [])
     revisions = revisions_value if isinstance(revisions_value, list) else []
     deployments = deployments_value if isinstance(deployments_value, list) else []
-    resolved_subscription_id = subscription_id or _subscription_id()
+    resolved_subscription_id = (
+        subscription_id or _subscription_id()
+        if revisions
+        else subscription_id
+    )
     for revision_value in reversed(revisions.copy()):
         revision = str(revision_value)
         if not revision.startswith(f"{container_app}--b"):
@@ -334,7 +338,7 @@ def cleanup_registry(
             continue
         try:
             deactivate_revision(
-                subscription_id=resolved_subscription_id,
+                subscription_id=str(resolved_subscription_id),
                 resource_group=resource_group,
                 container_app=container_app,
                 revision=revision,

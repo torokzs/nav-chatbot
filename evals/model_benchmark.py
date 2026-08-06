@@ -487,6 +487,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     registry = {"run_id": args.run_id, "deployments": [], "revisions": []}
     subscription_id: str | None = None
+    subscription_id: str | None = None
     write_registry(args.registry, registry)
     report: dict[str, Any] = {
         "schema_version": 1,
