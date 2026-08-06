@@ -154,15 +154,59 @@ jobs:
 
           azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$acr_endpoint"
           echo "backend_app_name=$backend_app_name" >> "$GITHUB_OUTPUT"
+          echo "acr_endpoint=$acr_endpoint" >> "$GITHUB_OUTPUT"
           echo "application_url=https://$application_fqdn" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy application
-        run: azd deploy --no-prompt
+      - name: Deploy frontend
+        run: azd deploy frontend --no-prompt
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           VITE_API_BASE_URL: ${{ steps.resources.outputs.application_url }}
+
+      - name: Build backend image
+        id: backend_image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          acr_endpoint="${{ steps.resources.outputs.acr_endpoint }}"
+          acr_name="${acr_endpoint%%.*}"
+          image_repository="nav-chatbot/backend-test"
+          image_tag="gh-${GITHUB_SHA::12}-${GITHUB_RUN_ATTEMPT}"
+
+          az acr build \
+            --registry "$acr_name" \
+            --image "$image_repository:$image_tag" \
+            backend
+
+          echo "image=$acr_endpoint/$image_repository:$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create isolated backend revision
+        id: backend_deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          backend_app_name="${{ steps.resources.outputs.backend_app_name }}"
+          stable_revision="${{ steps.initialize.outputs.stable_revision }}"
+          revision_suffix="gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          if [ -z "$stable_revision" ]; then
+            echo "::error::A stable backend revision is required for an isolated deployment."
+            exit 1
+          fi
+
+          az containerapp revision copy \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$backend_app_name" \
+            --from-revision "$stable_revision" \
+            --image "${{ steps.backend_image.outputs.image }}" \
+            --revision-suffix "$revision_suffix" \
+            --output none
+
+          echo "revision_name=$backend_app_name--$revision_suffix" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployed revision
         id: deployment_metadata
@@ -171,16 +215,7 @@ jobs:
           set -euo pipefail
 
           backend_app_name="${{ steps.resources.outputs.backend_app_name }}"
-          revision_name=$(az containerapp show \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$backend_app_name" \
-            --query properties.latestRevisionName \
-            --output tsv)
-
-          if [ -z "$revision_name" ]; then
-            echo "::error::The deployment did not create a Container App revision."
-            exit 1
-          fi
+          revision_name="${{ steps.backend_deploy.outputs.revision_name }}"
 
           for attempt in {1..30}; do
             running_state=$(az containerapp revision show \
