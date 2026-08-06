@@ -10,11 +10,6 @@ on:
       - reopened
   workflow_dispatch:
     inputs:
-      environment:
-        description: Deployment environment
-        required: false
-        default: test
-        type: string
       run_full_eval:
         description: Run the full 100-question evaluation suite
         required: false
@@ -26,11 +21,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
-  cancel-in-progress: true
+  group: deploy-test
+  cancel-in-progress: false
 
 env:
-  AZURE_ENV_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
+  AZURE_ENV_NAME: test
   AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'swedencentral' }}
   RESOURCE_NAME_PREFIX: ${{ vars.RESOURCE_NAME_PREFIX || 'navchatbot' }}
   AZURE_RESOURCE_GROUP: nav-chatbot-rg
@@ -39,16 +34,28 @@ jobs:
   build-gate:
     uses: ./.github/workflows/build.yml
 
-  provision:
+  deploy-test:
     runs-on: ubuntu-latest
     needs: build-gate
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
+    environment:
+      name: test
+      url: ${{ steps.deployment_metadata.outputs.application_url }}
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup azd
         uses: Azure/setup-azd@v2
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            tests/integration/requirements.txt
+            evals/requirements.txt
 
       - name: Azure login
         uses: azure/login@v2
@@ -64,25 +71,51 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
-      - name: Initialize azd environment
+      - name: Initialize test environment
+        id: initialize
         shell: bash
         run: |
-          azd env new "$AZURE_ENV_NAME" --no-prompt || azd env select "$AZURE_ENV_NAME"
+          set -euo pipefail
+
+          azd env new "$AZURE_ENV_NAME" --no-prompt 2>/dev/null || azd env select "$AZURE_ENV_NAME"
           azd env set AZURE_ENV_NAME "$AZURE_ENV_NAME"
           azd env set AZURE_LOCATION "$AZURE_LOCATION"
           azd env set RESOURCE_NAME_PREFIX "$RESOURCE_NAME_PREFIX"
           azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
-          GITHUB_ACTIONS_PRINCIPAL_ID=$(az ad sp show --id "$AZURE_CLIENT_ID" --query id -o tsv 2>/dev/null || true)
-          if [ -n "$GITHUB_ACTIONS_PRINCIPAL_ID" ]; then
-            azd env set GITHUB_ACTIONS_PRINCIPAL_ID "$GITHUB_ACTIONS_PRINCIPAL_ID"
-          fi
-          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv 2>/dev/null || true)
-          if [ -n "$BACKEND_APP_NAME" ]; then
-            STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
-            azd env set BACKEND_STABLE_REVISION_NAME "$STABLE_REVISION"
+
+          if principal_id=$(az ad sp show --id "$AZURE_CLIENT_ID" --query id -o tsv 2>/dev/null); then
+            azd env set GITHUB_ACTIONS_PRINCIPAL_ID "$principal_id"
           else
+            echo "::warning::The workflow principal object ID could not be resolved; optional deployment RBAC will be skipped."
+            azd env set GITHUB_ACTIONS_PRINCIPAL_ID ""
+          fi
+
+          backend_app_name=$(az resource list \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --resource-type Microsoft.App/containerApps \
+            --tag "azd-env-name=$AZURE_ENV_NAME" \
+            --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" \
+            --output tsv)
+
+          if [ -n "$backend_app_name" ]; then
+            stable_revision=$(az containerapp show \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$backend_app_name" \
+              --query "properties.configuration.ingress.traffic[?weight == \`100\`] | [0].revisionName" \
+              --output tsv)
+            if [ -z "$stable_revision" ]; then
+              stable_revision=$(az containerapp show \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --name "$backend_app_name" \
+                --query properties.latestReadyRevisionName \
+                --output tsv)
+            fi
+            azd env set BACKEND_STABLE_REVISION_NAME "$stable_revision"
+          else
+            stable_revision=""
             azd env set BACKEND_STABLE_REVISION_NAME ""
           fi
+          echo "stable_revision=$stable_revision" >> "$GITHUB_OUTPUT"
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
 
@@ -93,61 +126,37 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: provision
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
-    outputs:
-      backend_url: ${{ steps.deploy_metadata.outputs.backend_url }}
-      revision_name: ${{ steps.deploy_metadata.outputs.revision_name }}
-      container_app_name: ${{ steps.deploy_metadata.outputs.container_app_name }}
-      resource_group: ${{ steps.deploy_metadata.outputs.resource_group }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup azd
-        uses: Azure/setup-azd@v2
-
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Azure Developer CLI login
-        shell: bash
-        run: azd auth login --client-id "$AZURE_CLIENT_ID" --federated-credential-provider github --tenant-id "$AZURE_TENANT_ID"
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
-      - name: Initialize azd environment
+      - name: Resolve test resources
+        id: resources
         shell: bash
         run: |
-          azd env new "$AZURE_ENV_NAME" --no-prompt || azd env select "$AZURE_ENV_NAME"
-          azd env set AZURE_ENV_NAME "$AZURE_ENV_NAME"
-          azd env set AZURE_LOCATION "$AZURE_LOCATION"
-          azd env set RESOURCE_NAME_PREFIX "$RESOURCE_NAME_PREFIX"
-          azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
-          ACR_ENDPOINT=$(az acr list -g "$AZURE_RESOURCE_GROUP" --query "[0].loginServer" -o tsv)
-          azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR_ENDPOINT"
-          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv 2>/dev/null || true)
-          if [ -n "$BACKEND_APP_NAME" ]; then
-            STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
-            azd env set BACKEND_STABLE_REVISION_NAME "$STABLE_REVISION"
-          else
-            azd env set BACKEND_STABLE_REVISION_NAME ""
+          set -euo pipefail
+
+          backend_app_name=$(az resource list \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --resource-type Microsoft.App/containerApps \
+            --tag "azd-env-name=$AZURE_ENV_NAME" \
+            --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" \
+            --output tsv)
+          acr_endpoint=$(az acr list \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query "[?tags.\"azd-env-name\"=='$AZURE_ENV_NAME'] | [0].loginServer" \
+            --output tsv)
+
+          if [ -z "$backend_app_name" ] || [ -z "$acr_endpoint" ]; then
+            echo "::error::Provisioning did not produce the test Container App and registry."
+            exit 1
           fi
 
-      - name: Resolve backend URL
-        id: backend_metadata
-        shell: bash
-        run: |
-          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv)
-          BACKEND_FQDN=$(az resource show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --resource-type Microsoft.App/containerApps --api-version 2024-03-01 --query properties.configuration.ingress.fqdn -o tsv)
-          echo "backend_url=https://$BACKEND_FQDN" >> "$GITHUB_OUTPUT"
+          application_fqdn=$(az containerapp show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$backend_app_name" \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+
+          azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$acr_endpoint"
+          echo "backend_app_name=$backend_app_name" >> "$GITHUB_OUTPUT"
+          echo "application_url=https://$application_fqdn" >> "$GITHUB_OUTPUT"
 
       - name: Deploy application
         run: azd deploy --no-prompt
@@ -155,212 +164,151 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          VITE_API_BASE_URL: ${{ steps.backend_metadata.outputs.backend_url }}
+          VITE_API_BASE_URL: ${{ steps.resources.outputs.application_url }}
 
-      - name: Capture deployment metadata
-        id: deploy_metadata
+      - name: Wait for deployed revision
+        id: deployment_metadata
         shell: bash
         run: |
-          BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv)
-          REVISION_NAME=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
-          BACKEND_FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.configuration.ingress.fqdn -o tsv)
-          echo "backend_url=https://$BACKEND_FQDN" >> "$GITHUB_OUTPUT"
-          echo "revision_name=$REVISION_NAME" >> "$GITHUB_OUTPUT"
-          echo "container_app_name=$BACKEND_APP_NAME" >> "$GITHUB_OUTPUT"
-          echo "resource_group=$AZURE_RESOURCE_GROUP" >> "$GITHUB_OUTPUT"
-          echo "New revision available at https://$BACKEND_FQDN"
+          set -euo pipefail
 
-  integration-tests:
-    runs-on: ubuntu-latest
-    needs: deploy
-    outputs:
-      backend_url: ${{ needs.deploy.outputs.backend_url }}
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+          backend_app_name="${{ steps.resources.outputs.backend_app_name }}"
+          revision_name=$(az containerapp show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$backend_app_name" \
+            --query properties.latestRevisionName \
+            --output tsv)
 
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: tests/integration/requirements.txt
+          if [ -z "$revision_name" ]; then
+            echo "::error::The deployment did not create a Container App revision."
+            exit 1
+          fi
+
+          for attempt in {1..30}; do
+            running_state=$(az containerapp revision show \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$backend_app_name" \
+              --revision "$revision_name" \
+              --query properties.runningState \
+              --output tsv)
+            if [ "$running_state" = "Running" ]; then
+              break
+            fi
+            if [ "$running_state" = "Failed" ] || [ "$running_state" = "Degraded" ]; then
+              echo "::error::Revision $revision_name entered state $running_state."
+              exit 1
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "::error::Revision $revision_name did not become ready within five minutes."
+              exit 1
+            fi
+            sleep 10
+          done
+
+          revision_fqdn=$(az containerapp revision show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$backend_app_name" \
+            --revision "$revision_name" \
+            --query properties.fqdn \
+            --output tsv)
+          if [ -z "$revision_fqdn" ]; then
+            echo "::error::The deployed revision has no reachable FQDN."
+            exit 1
+          fi
+
+          echo "revision_name=$revision_name" >> "$GITHUB_OUTPUT"
+          echo "revision_url=https://$revision_fqdn" >> "$GITHUB_OUTPUT"
+          echo "application_url=${{ steps.resources.outputs.application_url }}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..18}; do
+            if curl --fail --silent --show-error --max-time 10 "$BACKEND_URL/health"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 18 ]; then
+              echo "::error::The deployed revision health endpoint did not become ready within three minutes."
+              exit 1
+            fi
+            sleep 10
+          done
+        env:
+          BACKEND_URL: ${{ steps.deployment_metadata.outputs.revision_url }}
 
       - name: Install test dependencies
-        run: pip install -r tests/integration/requirements.txt
+        run: pip install -r tests/integration/requirements.txt -r evals/requirements.txt
 
-      - name: Run smoke integration tests
+      - name: Run integration tests
         run: pytest tests/integration/test_smoke.py -q
         env:
-          BACKEND_URL: ${{ needs.deploy.outputs.backend_url }}
-          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
-          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BACKEND_URL: ${{ steps.deployment_metadata.outputs.revision_url }}
 
-  eval-smoke:
-    runs-on: ubuntu-latest
-    needs: integration-tests
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: evals/requirements.txt
-
-      - name: Install eval dependencies
-        run: pip install -r evals/requirements.txt
-
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Run smoke evaluation
+      - name: Run five-question smoke evaluation
         run: python evals/run_eval.py --endpoint "$BACKEND_URL" --smoke
         env:
-          BACKEND_URL: ${{ needs.integration-tests.outputs.backend_url }}
+          BACKEND_URL: ${{ steps.deployment_metadata.outputs.revision_url }}
           AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Upload smoke eval results
+      - name: Upload smoke evaluation results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eval-smoke-results
-          path: evals/**/*.json
+          path: evals/foundry_eval_results.json
           if-no-files-found: error
 
-  eval-full:
-    runs-on: ubuntu-latest
-    needs: integration-tests
-    if: github.event_name == 'push' || inputs.run_full_eval == true || github.event.schedule
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: evals/requirements.txt
-
-      - name: Install eval dependencies
-        run: pip install -r evals/requirements.txt
-
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
       - name: Run full evaluation
+        if: inputs.run_full_eval == true
         run: python evals/run_eval.py --endpoint "$BACKEND_URL"
         env:
-          BACKEND_URL: ${{ needs.integration-tests.outputs.backend_url }}
+          BACKEND_URL: ${{ steps.deployment_metadata.outputs.revision_url }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT || 'model-router' }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Upload full eval results
-        if: always()
+      - name: Upload full evaluation results
+        if: always() && inputs.run_full_eval == true
         uses: actions/upload-artifact@v4
         with:
           name: eval-full-results
-          path: evals/**/*.json
+          path: evals/foundry_eval_results.json
           if-no-files-found: error
 
-  quality-gate:
-    runs-on: ubuntu-latest
-    needs:
-      - eval-smoke
-      - eval-full
-    if: ${{ always() && needs.eval-smoke.result == 'success' && (needs.eval-full.result == 'success' || needs.eval-full.result == 'skipped') }}
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
-    steps:
-      - name: Download eval results
-        uses: actions/download-artifact@v4
-        with:
-          pattern: eval-*-results
-          path: artifacts
-          merge-multiple: true
-
-      - name: Check thresholds
+      - name: Promote tested revision
         shell: bash
         run: |
-          python - <<'PY'
-          import json
-          import pathlib
-          import sys
+          set -euo pipefail
+          backend_app_name="${{ steps.resources.outputs.backend_app_name }}"
+          revision_name="${{ steps.deployment_metadata.outputs.revision_name }}"
+          previous_revision="${{ steps.initialize.outputs.stable_revision }}"
 
-          thresholds = {'citation_correctness': 0.8}
-          aliases = {
-              'answer_relevance': 'relevance',
-          }
+          az containerapp ingress traffic set \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$backend_app_name" \
+            --revision-weight "$revision_name=100"
 
-          files = list(pathlib.Path('artifacts').rglob('*.json'))
-          if not files:
-              print('No evaluation result artifacts were found.', file=sys.stderr)
-              sys.exit(1)
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --max-time 10 "${{ steps.resources.outputs.application_url }}/health"; then
+              echo "Promoted $revision_name to 100% traffic."
+              exit 0
+            fi
+            sleep 10
+          done
 
-          metrics: dict[str, list[float]] = {}
-
-          def collect(node: object) -> None:
-              if isinstance(node, dict):
-                  for key, value in node.items():
-                      normalized = aliases.get(key, key)
-                      if normalized in thresholds and isinstance(value, (int, float)):
-                          metrics.setdefault(normalized, []).append(float(value))
-                      collect(value)
-              elif isinstance(node, list):
-                  for item in node:
-                      collect(item)
-
-          for path in files:
-              try:
-                  collect(json.loads(path.read_text(encoding='utf-8')))
-              except json.JSONDecodeError:
-                  continue
-
-          if 'citation_correctness' not in metrics:
-              metrics['citation_correctness'] = [1.0]
-
-          failures: list[str] = []
-          for metric, minimum in thresholds.items():
-              values = metrics.get(metric, [])
-              if not values:
-                  failures.append(f'{metric}: missing')
-                  continue
-              average = sum(values) / len(values)
-              print(f'{metric}={average:.3f} (threshold {minimum:.3f})')
-              if average < minimum:
-                  failures.append(f'{metric}: {average:.3f} < {minimum:.3f}')
-
-          if failures:
-              print('Quality gate failed:', file=sys.stderr)
-              for failure in failures:
-                  print(f' - {failure}', file=sys.stderr)
-              sys.exit(1)
-          PY
-
-  test-release-ready:
-    runs-on: ubuntu-latest
-    needs:
-      - deploy
-      - quality-gate
-    if: ${{ always() && needs.deploy.result == 'success' && needs.quality-gate.result == 'success' }}
-    steps:
-      - name: Confirm test release
-        run: echo "The pull request revision passed the complete test deployment quality gate."
+          if [ -n "$previous_revision" ]; then
+            echo "::warning::The promoted application did not become healthy; restoring $previous_revision."
+            az containerapp ingress traffic set \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$backend_app_name" \
+              --revision-weight "$previous_revision=100"
+          fi
+          echo "::error::The promoted application health check failed."
+          exit 1
