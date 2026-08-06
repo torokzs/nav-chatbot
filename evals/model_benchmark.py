@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from azure.identity import DefaultAzureCredential
 
 from benchmark_azure import (
     AzureCommandError,
@@ -23,6 +24,7 @@ from benchmark_azure import (
     revision_suffix,
     run_az,
     validate_traffic_isolation,
+    wait_for_deployment_data_plane,
     wait_for_revision,
     write_registry,
 )
@@ -97,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     run_parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     run_parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     run_parser.add_argument("--max-estimated-cost-usd", type=float, default=100.0)
-    run_parser.add_argument("--deployment-capacity", type=int, default=10)
+    run_parser.add_argument("--deployment-capacity", type=int, default=100)
     run_parser.add_argument("--requests-per-minute", type=int, default=25)
     run_parser.add_argument(
         "--question-count",
@@ -1039,6 +1041,22 @@ def run_benchmark(args: argparse.Namespace) -> int:
                     registry["deployments"].append(deployment)
                     write_registry(args.registry, registry)
                     revision_deployment = deployment
+                    credential = DefaultAzureCredential(
+                        exclude_interactive_browser_credential=True
+                    )
+                    try:
+                        access_token = credential.get_token(
+                            "https://cognitiveservices.azure.com/.default"
+                        ).token
+                    finally:
+                        credential.close()
+                    with httpx.Client() as readiness_client:
+                        wait_for_deployment_data_plane(
+                            readiness_client,
+                            endpoint=judge_endpoint,
+                            deployment=deployment,
+                            access_token=access_token,
+                        )
                 suffix = revision_suffix(args.run_id, index)
                 revision = create_revision(
                     subscription_id=subscription_id,

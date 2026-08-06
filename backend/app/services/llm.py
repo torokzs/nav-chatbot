@@ -1,8 +1,8 @@
 from collections.abc import AsyncGenerator
 
-from azure.ai.inference.aio import ChatCompletionsClient
-from azure.ai.inference.models import SystemMessage, UserMessage
-from azure.identity.aio import DefaultAzureCredential
+from azure.core.credentials_async import AsyncTokenCredential
+from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
+from openai import AsyncAzureOpenAI
 
 from app.config import Settings, get_settings
 from app.models.schemas import ChunkResult, DocumentResult
@@ -30,20 +30,29 @@ class LLMService:
         self,
         settings: Settings | None = None,
         *,
-        credential: DefaultAzureCredential | None = None,
-        client: ChatCompletionsClient | None = None,
+        credential: AsyncTokenCredential | None = None,
+        client: AsyncAzureOpenAI | None = None,
     ) -> None:
         self._settings = settings or get_settings()
-        self._credential = credential or DefaultAzureCredential()
-        self._client = client or ChatCompletionsClient(
-            endpoint=f"{self._settings.azure_ai_foundry_endpoint.rstrip('/')}/openai/deployments/{self._settings.azure_ai_foundry_chat_deployment}",
-            credential=self._credential,
-            credential_scopes=["https://cognitiveservices.azure.com/.default"],
-        )
+        self._credential = credential
+        if client is not None:
+            self._client = client
+        else:
+            self._credential = credential or DefaultAzureCredential()
+            token_provider = get_bearer_token_provider(
+                self._credential,
+                "https://cognitiveservices.azure.com/.default",
+            )
+            self._client = AsyncAzureOpenAI(
+                azure_endpoint=self._settings.azure_ai_foundry_endpoint,
+                azure_ad_token_provider=token_provider,
+                api_version="2024-10-21",
+            )
 
     async def close(self) -> None:
         await self._client.close()
-        await self._credential.close()
+        if self._credential is not None:
+            await self._credential.close()
 
     async def generate_response(
         self,
@@ -70,10 +79,11 @@ class LLMService:
             f"Kontextus:\n{context_text}"
         )
 
-        stream = await self._client.complete(
+        stream = await self._client.chat.completions.create(
+            model=self._settings.azure_ai_foundry_chat_deployment,
             messages=[
-                SystemMessage(content=_SYSTEM_PROMPT),
-                UserMessage(content=prompt),
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
             ],
             stream=True,
             temperature=0.2,
@@ -82,5 +92,5 @@ class LLMService:
         async for update in stream:
             for choice in update.choices:
                 delta = choice.delta
-                if delta and delta.content:
+                if delta.content:
                     yield delta.content

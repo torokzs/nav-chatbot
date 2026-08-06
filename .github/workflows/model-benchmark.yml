@@ -46,7 +46,7 @@ on:
       deployment_capacity:
         description: Requested realtime deployment capacity units (bounded by discovered SKU quota)
         required: true
-        default: '10'
+        default: '100'
         type: string
       question_count:
         description: Number of deterministic benchmark questions to run (1-100)

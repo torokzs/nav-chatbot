@@ -83,6 +83,72 @@ def fetch_retail_prices(
     return list(unique.values())
 
 
+def wait_for_deployment_data_plane(
+    client: httpx.Client,
+    *,
+    endpoint: str,
+    deployment: str,
+    access_token: str,
+    timeout_seconds: float = 360.0,
+    poll_interval_seconds: float = 10.0,
+    request: Callable[..., httpx.Response] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    requester = request or client.post
+    url = (
+        f"{endpoint.rstrip('/')}/openai/deployments/{deployment}/chat/completions"
+    )
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messages": [
+            {"role": "user", "content": "Reply with OK."},
+        ],
+        "stream": False,
+    }
+    deadline = monotonic() + timeout_seconds
+    last_status = 0
+    last_error_code = "unknown"
+
+    while True:
+        response = requester(
+            url,
+            params={"api-version": "2024-10-21"},
+            headers=headers,
+            json=payload,
+            timeout=30.0,
+        )
+        last_status = response.status_code
+        try:
+            response_payload = response.json()
+        except json.JSONDecodeError:
+            response_payload = {}
+        if response.status_code == 200:
+            return response_payload if isinstance(response_payload, dict) else {}
+
+        if isinstance(response_payload, dict):
+            error = response_payload.get("error", {})
+            if isinstance(error, dict):
+                last_error_code = str(error.get("code", "unknown"))
+        if response.status_code not in {404, 429, 500, 502, 503, 504}:
+            response.raise_for_status()
+        if monotonic() >= deadline:
+            raise AzureCommandError(
+                "Timed out waiting for deployment data-plane readiness "
+                f"({deployment}, HTTP {last_status}, {last_error_code})."
+            )
+        LOGGER.info(
+            "Deployment %s is not data-plane ready yet (HTTP %d, %s); retrying.",
+            deployment,
+            last_status,
+            last_error_code,
+        )
+        sleep(poll_interval_seconds)
+
+
 def validate_traffic_isolation(app: Mapping[str, Any]) -> tuple[str, str]:
     properties = app.get("properties")
     if not isinstance(properties, Mapping):

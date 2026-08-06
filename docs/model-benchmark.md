@@ -67,13 +67,13 @@ Retail Prices API publikus, ahhoz nem szükséges Azure szerepkör.
    modellekhez és a judge-hoz. Hiányzó vagy többértelmű meter esetén az ár
    `unknown`; az érintett jelölt fizetős futása kimarad. Ismeretlen judge-árnál
    a teljes paid benchmark blokkol, mert a judge-költség nem korlátozható.
-3. A 100 jelölt-hívás és a kérdésenkénti három LLM judge értékelés
+3. A kiválasztott számú jelölt-hívás és a kérdésenkénti három LLM judge értékelés
    konzervatív becslése lefut **minden fizetős hívás előtt**. Ismeretlen ár vagy
    a keret túllépése esetén a benchmark blokkol, deploymentet nem hoz létre.
 4. Jelöltenként run-scoped deployment készül, majd a stabil backend revízió
    másolata kizárólag az `AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT` változó
    felülírásával.
-5. A revízió saját FQDN-jén lefut az `evals/qa.jsonl` mind a 100 kérdése.
+5. A revízió saját FQDN-jén lefut az `evals/qa.jsonl` kiválasztott kérdésszáma.
 6. Az Azure AI Evaluation SDK a fix judge deploymenttel groundedness,
    relevance és fluency score-t számol; a citation correctness determinisztikus
    evaluatorból érkezik.
@@ -110,6 +110,11 @@ további pontos katalógusmodell-nevek adhatók meg; üres érték visszakapcsol
 teljes családalapú shortlistet. A dinamikus router tényleges díja a választott
 almodelltől függ, ezért a preflight az operátor által megadott
 `dynamic_model_max_cost_per_question_usd` plafont használja.
+
+A gyors mód alapértelmezett ideiglenes kapacitása 100 egység, de a felderített
+szabad kvóta ezt továbbra is korlátozza. A benchmark a deployment létrehozása után
+külön data-plane próbával megvárja az Azure legfeljebb néhány perces
+propagációját, és csak ezután indítja a backend revíziót és a mért kérdéseket.
 
 PR előtti méréshez a `base_revision` inputtal megadható egy előzőleg
 deployolt, egészséges, 0%-os forgalmú branch-revízió. Így a benchmark a friss

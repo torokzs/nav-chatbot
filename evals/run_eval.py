@@ -29,6 +29,8 @@ DATASET_FILE = "qa.jsonl"
 SMOKE_DATASET_FILE = "qa.smoke.jsonl"
 EVAL_INPUT_FILE = SCRIPT_DIR / ".foundry_eval_input.jsonl"
 EVAL_OUTPUT_FILE = SCRIPT_DIR / "foundry_eval_results.json"
+RETRYABLE_CHAT_STATUS_CODES = {403, 404, 429, 500, 502, 503, 504}
+CHAT_REQUEST_MAX_ATTEMPTS = 5
 
 
 @dataclass(slots=True)
@@ -213,12 +215,6 @@ def call_chat_endpoint(
     benchmark_token: str | None = None,
 ) -> ChatRunResult:
     url = build_chat_url(endpoint)
-    response_text_parts: list[str] = []
-    sources: list[dict[str, Any]] = []
-    evaluation_context: list[dict[str, Any]] = []
-    started = time.perf_counter()
-    first_token_at: float | None = None
-
     LOGGER.debug("Calling %s", url)
     payload: dict[str, Any] = {
         "message": question,
@@ -233,49 +229,80 @@ def call_chat_endpoint(
         if benchmark_token
         else None
     )
-    with client.stream(
-        "POST",
-        url,
-        json=payload,
-        headers=headers,
-    ) as response:
-        response.raise_for_status()
-        for line in response.iter_lines():
-            if not line:
-                continue
-            event = parse_sse_payload(line)
-            if event is None:
-                continue
-            event_type = event.get("type")
-            content = event.get("content")
-            if event_type == "token" and isinstance(content, str):
-                if first_token_at is None:
-                    first_token_at = time.perf_counter()
-                response_text_parts.append(content)
-            elif event_type == "context" and isinstance(content, list):
-                evaluation_context = [item for item in content if isinstance(item, dict)]
-            elif event_type == "sources" and isinstance(content, list):
-                sources = [item for item in content if isinstance(item, dict)]
-            elif event_type == "error":
-                raise RuntimeError(str(content or "Unknown backend error"))
-            elif event_type == "done":
-                break
+    for attempt in range(1, CHAT_REQUEST_MAX_ATTEMPTS + 1):
+        response_text_parts: list[str] = []
+        sources: list[dict[str, Any]] = []
+        returned_context: list[dict[str, Any]] = []
+        started = time.perf_counter()
+        first_token_at: float | None = None
 
-    answer = "".join(response_text_parts).strip()
-    if not answer and not retrieval_only:
-        raise RuntimeError("The backend returned an empty answer.")
-    completed = time.perf_counter()
-    output_tokens = len(tiktoken.get_encoding("cl100k_base").encode(answer))
-    return ChatRunResult(
-        question=question,
-        response=answer,
-        sources=sources,
-        evaluation_context=evaluation_context,
-        ttft_seconds=None if first_token_at is None else first_token_at - started,
-        total_latency_seconds=completed - started,
-        output_tokens=output_tokens,
-        output_tokens_source="cl100k_base estimate; backend SSE does not expose usage",
-    )
+        with client.stream(
+            "POST",
+            url,
+            json=payload,
+            headers=headers,
+        ) as response:
+            if (
+                response.status_code in RETRYABLE_CHAT_STATUS_CODES
+                and attempt < CHAT_REQUEST_MAX_ATTEMPTS
+            ):
+                delay_seconds = min(5 * (2 ** (attempt - 1)), 20)
+                LOGGER.warning(
+                    "Backend returned HTTP %d; retrying in %d seconds (%d/%d).",
+                    response.status_code,
+                    delay_seconds,
+                    attempt,
+                    CHAT_REQUEST_MAX_ATTEMPTS,
+                )
+            else:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    event = parse_sse_payload(line)
+                    if event is None:
+                        continue
+                    event_type = event.get("type")
+                    content = event.get("content")
+                    if event_type == "token" and isinstance(content, str):
+                        if first_token_at is None:
+                            first_token_at = time.perf_counter()
+                        response_text_parts.append(content)
+                    elif event_type == "context" and isinstance(content, list):
+                        returned_context = [
+                            item for item in content if isinstance(item, dict)
+                        ]
+                    elif event_type == "sources" and isinstance(content, list):
+                        sources = [item for item in content if isinstance(item, dict)]
+                    elif event_type == "error":
+                        raise RuntimeError(str(content or "Unknown backend error"))
+                    elif event_type == "done":
+                        break
+
+                answer = "".join(response_text_parts).strip()
+                if not answer and not retrieval_only:
+                    raise RuntimeError("The backend returned an empty answer.")
+                completed = time.perf_counter()
+                output_tokens = len(
+                    tiktoken.get_encoding("cl100k_base").encode(answer)
+                )
+                return ChatRunResult(
+                    question=question,
+                    response=answer,
+                    sources=sources,
+                    evaluation_context=returned_context,
+                    ttft_seconds=(
+                        None if first_token_at is None else first_token_at - started
+                    ),
+                    total_latency_seconds=completed - started,
+                    output_tokens=output_tokens,
+                    output_tokens_source=(
+                        "cl100k_base estimate; backend SSE does not expose usage"
+                    ),
+                )
+        time.sleep(delay_seconds)
+
+    raise RuntimeError("Backend retry loop exited unexpectedly.")
 
 
 

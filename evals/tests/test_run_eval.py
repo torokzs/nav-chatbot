@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from evals.run_eval import CitationCorrectnessEvaluator, load_dataset
+import httpx
+
+from evals.run_eval import (
+    CitationCorrectnessEvaluator,
+    call_chat_endpoint,
+    load_dataset,
+)
 
 
 def test_citation_correctness_requires_citation_in_response_and_sources() -> None:
@@ -56,3 +63,62 @@ def test_evaluation_datasets_are_explicitly_2026_only() -> None:
             row["ground_truth_source"]
             for row in rows
         } == {"azure_search_2026_index"}
+
+
+def test_call_chat_endpoint_sends_frozen_context_and_token() -> None:
+    frozen_context = [{"content": "2026-os szabály", "score": 0.91}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["evaluation_context"] == frozen_context
+        assert request.headers["x-benchmark-context-token"] == "secret"
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"token","content":"Válasz"}\n\n'
+                'data: {"type":"context","content":[{"content":"2026-os szabály","score":0.91}]}\n\n'
+                'data: {"type":"sources","content":[]}\n\n'
+                'data: {"type":"done"}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = call_chat_endpoint(
+            client,
+            "https://benchmark.example",
+            "Kérdés?",
+            2026,
+            evaluation_context=frozen_context,
+            benchmark_token="secret",
+        )
+
+    assert result.response == "Válasz"
+    assert result.evaluation_context == frozen_context
+
+
+def test_call_chat_endpoint_retries_transient_403(monkeypatch) -> None:
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(403)
+        return httpx.Response(
+            200,
+            text='data: {"type":"done"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    monkeypatch.setattr("evals.run_eval.time.sleep", lambda _seconds: None)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        call_chat_endpoint(
+            client,
+            "https://benchmark.example",
+            "Kérdés?",
+            2026,
+            retrieval_only=True,
+        )
+
+    assert attempts == 2

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from evals.benchmark_azure import (
@@ -8,6 +9,7 @@ from evals.benchmark_azure import (
     deployment_name,
     revision_suffix,
     validate_traffic_isolation,
+    wait_for_deployment_data_plane,
     wait_for_revision,
 )
 
@@ -59,6 +61,38 @@ def test_deployment_name_is_run_scoped_and_bounded() -> None:
 
 def test_revision_suffix_changes_between_run_attempts() -> None:
     assert revision_suffix("123456-1", 1) != revision_suffix("123456-2", 1)
+
+
+def test_wait_for_deployment_data_plane_retries_propagation() -> None:
+    responses = iter(
+        [
+            httpx.Response(
+                404,
+                json={"error": {"code": "DeploymentNotFound"}},
+            ),
+            httpx.Response(200, json={"model": "gpt-5-mini"}),
+        ]
+    )
+    sleeps: list[float] = []
+
+    def request(url: str, **kwargs) -> httpx.Response:
+        assert url.endswith("/openai/deployments/temporary/chat/completions")
+        assert kwargs["headers"]["Authorization"] == "Bearer token"
+        return next(responses)
+
+    with httpx.Client() as client:
+        result = wait_for_deployment_data_plane(
+            client,
+            endpoint="https://foundry.example",
+            deployment="temporary",
+            access_token="token",
+            request=request,
+            monotonic=iter([0.0, 1.0]).__next__,
+            sleep=sleeps.append,
+        )
+
+    assert result["model"] == "gpt-5-mini"
+    assert sleeps == [10.0]
 
 
 def test_build_revision_template_retargets_deployment_without_mutating_base() -> None:
