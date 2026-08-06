@@ -93,8 +93,7 @@ jobs:
           backend_app_name=$(az resource list \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --resource-type Microsoft.App/containerApps \
-            --tag "azd-env-name=$AZURE_ENV_NAME" \
-            --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" \
+            --query "[?tags.\"azd-env-name\"=='$AZURE_ENV_NAME' && tags.\"azd-service-name\"=='backend'] | [0].name" \
             --output tsv)
 
           if [ -n "$backend_app_name" ]; then
@@ -135,8 +134,7 @@ jobs:
           backend_app_name=$(az resource list \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --resource-type Microsoft.App/containerApps \
-            --tag "azd-env-name=$AZURE_ENV_NAME" \
-            --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" \
+            --query "[?tags.\"azd-env-name\"=='$AZURE_ENV_NAME' && tags.\"azd-service-name\"=='backend'] | [0].name" \
             --output tsv)
           acr_endpoint=$(az acr list \
             --resource-group "$AZURE_RESOURCE_GROUP" \
@@ -246,6 +244,7 @@ jobs:
           BACKEND_URL: ${{ steps.deployment_metadata.outputs.revision_url }}
 
       - name: Run five-question smoke evaluation
+        id: smoke_evaluation
         run: python evals/run_eval.py --endpoint "$BACKEND_URL" --smoke
         env:
           BACKEND_URL: ${{ steps.deployment_metadata.outputs.revision_url }}
@@ -256,7 +255,7 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Upload smoke evaluation results
-        if: always()
+        if: always() && steps.smoke_evaluation.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: eval-smoke-results
