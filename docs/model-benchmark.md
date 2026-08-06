@@ -99,9 +99,16 @@ Az operátori ellenőrzéshez a `--preflight-only` kapcsoló a teljes modell-,
 SKU-, quota- és Retail Price felderítést, valamint a költségkaput lefuttatja,
 de nem hoz létre deploymentet és nem indít fizetős modellhívást.
 
+A `question_count` workflow input (CLI-n `--question-count`) 1 és 100 közötti
+determinista kérdésszámot választ. Az 5 kérdéses gyors mód az első öt kanonikus
+kérdést használja, ezért futások között közvetlenül összehasonlítható; az ilyen
+kis minta iránymutató, nem helyettesíti a teljes minőségi benchmarkot.
+
 PR előtti méréshez a `base_revision` inputtal megadható egy előzőleg
 deployolt, egészséges, 0%-os forgalmú branch-revízió. Így a benchmark a friss
 backend-kódot méri, miközben a produkciós traffic rule változatlan marad.
+Ennek a revíziónak az aktuális chat deploymentje mindig külön
+`current-model` baseline jelöltként fut, ideiglenes deployment létrehozása nélkül.
 
 ## Metrikák és rangsorolás
 

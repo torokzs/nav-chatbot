@@ -15,6 +15,7 @@ from evals.benchmark_core import (
     percentile,
     quality_passes,
     rank_results,
+    select_questions,
 )
 
 
@@ -463,3 +464,15 @@ def test_preflight_includes_judge_calls_for_every_candidate() -> None:
     expected_judge = 2 * 100 * 3 * judge.estimate(2_000, 200)
     assert unknown == []
     assert estimate == pytest.approx(expected_generation + expected_judge)
+
+
+def test_select_questions_returns_reproducible_leading_subset() -> None:
+    rows = [{"id": index} for index in range(10)]
+
+    assert select_questions(rows, 5) == rows[:5]
+
+
+@pytest.mark.parametrize("question_count", [0, 11])
+def test_select_questions_rejects_invalid_count(question_count: int) -> None:
+    with pytest.raises(ValueError, match="question_count"):
+        select_questions([{"id": index} for index in range(10)], question_count)

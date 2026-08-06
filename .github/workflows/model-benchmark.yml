@@ -48,6 +48,11 @@ on:
         required: true
         default: '10'
         type: string
+      question_count:
+        description: Number of deterministic benchmark questions to run (1-100)
+        required: true
+        default: '100'
+        type: string
       base_revision:
         description: Optional healthy zero-traffic backend revision to benchmark
         required: false
@@ -125,6 +130,7 @@ jobs:
             --run-id "${{ github.run_id }}-${{ github.run_attempt }}" \
             --max-estimated-cost-usd "${{ inputs.max_estimated_cost_usd }}" \
             --deployment-capacity "${{ inputs.deployment_capacity }}" \
+            --question-count "${{ inputs.question_count }}" \
             --base-revision "${{ inputs.base_revision }}" \
             --output-dir "$BENCHMARK_OUTPUT_DIR" \
             --registry "$BENCHMARK_REGISTRY"

@@ -37,6 +37,7 @@ from benchmark_core import (
     parse_available_models,
     quality_score,
     rank_results,
+    select_questions,
     summarize_timings,
 )
 from run_eval import (
@@ -97,6 +98,12 @@ def parse_args() -> argparse.Namespace:
     run_parser.add_argument("--deployment-capacity", type=int, default=10)
     run_parser.add_argument("--requests-per-minute", type=int, default=25)
     run_parser.add_argument(
+        "--question-count",
+        type=int,
+        default=100,
+        help="Number of deterministic leading dataset questions to benchmark (1-100).",
+    )
+    run_parser.add_argument(
         "--base-revision",
         default=os.getenv("AZURE_CONTAINER_APP_BASE_REVISION"),
         help="Optional healthy zero-traffic branch revision to copy instead of production.",
@@ -135,6 +142,27 @@ def _model_details(deployment: dict[str, Any]) -> tuple[str, str, str]:
         str(model.get("version", "")),
         str(sku.get("name", "") or scale_settings.get("scaleType", "")),
     )
+
+
+def _revision_deployment(revision: dict[str, Any]) -> str:
+    properties = revision.get("properties", {})
+    template = properties.get("template", {}) if isinstance(properties, dict) else {}
+    containers = template.get("containers", []) if isinstance(template, dict) else []
+    if not isinstance(containers, list):
+        return ""
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        env = container.get("env", [])
+        if not isinstance(env, list):
+            continue
+        for variable in env:
+            if (
+                isinstance(variable, dict)
+                and variable.get("name") == "AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT"
+            ):
+                return str(variable.get("value", "")).strip()
+    return ""
 
 
 def _price_dict(price: TokenPrice | None) -> dict[str, Any] | None:
@@ -503,6 +531,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
             "location": args.location,
             "judge_deployment": args.judge_deployment,
             "deployment_capacity": args.deployment_capacity,
+            "question_count": args.question_count,
             "dataset": str(args.dataset),
             "thresholds": QUALITY_THRESHOLDS,
             "token_accounting": (
@@ -526,9 +555,12 @@ def run_benchmark(args: argparse.Namespace) -> int:
             raise ValueError("deployment_capacity must be greater than zero.")
         if args.requests_per_minute <= 0:
             raise ValueError("requests_per_minute must be greater than zero.")
-        dataset = load_dataset(args.dataset)
-        if len(dataset) != 100:
-            raise ValueError(f"Full benchmark requires exactly 100 questions; found {len(dataset)}.")
+        full_dataset = load_dataset(args.dataset)
+        if len(full_dataset) != 100:
+            raise ValueError(
+                f"Canonical benchmark dataset requires exactly 100 questions; found {len(full_dataset)}."
+            )
+        dataset = select_questions(full_dataset, args.question_count)
 
         app = run_az(
             [
@@ -552,29 +584,39 @@ def run_benchmark(args: argparse.Namespace) -> int:
             raise AzureCommandError("Azure subscription ID could not be resolved.")
         base_revision = production_revision
         if args.base_revision:
-            revision_url = (
-                f"https://management.azure.com/subscriptions/{subscription_id}"
-                f"/resourceGroups/{args.resource_group}"
-                "/providers/Microsoft.App/containerApps"
-                f"/{args.container_app}/revisions/{args.base_revision}"
-                "?api-version=2024-03-01"
-            )
-            revision_response = run_az(
-                ["rest", "--method", "get", "--url", revision_url]
-            )
-            revision_properties = (
-                revision_response.get("properties", {})
-                if isinstance(revision_response, dict)
-                else {}
-            )
-            health = str(revision_properties.get("healthState", "")).lower()
-            running = str(revision_properties.get("runningState", "")).lower()
-            if health != "healthy" or running != "running":
-                raise AzureCommandError(
-                    f"Base revision {args.base_revision} is not healthy and running."
-                )
             base_revision = args.base_revision
+        revision_url = (
+            f"https://management.azure.com/subscriptions/{subscription_id}"
+            f"/resourceGroups/{args.resource_group}"
+            "/providers/Microsoft.App/containerApps"
+            f"/{args.container_app}/revisions/{base_revision}"
+            "?api-version=2024-03-01"
+        )
+        revision_response = run_az(
+            ["rest", "--method", "get", "--url", revision_url]
+        )
+        revision_properties = (
+            revision_response.get("properties", {})
+            if isinstance(revision_response, dict)
+            else {}
+        )
+        health = str(revision_properties.get("healthState", "")).lower()
+        running = str(revision_properties.get("runningState", "")).lower()
+        if health != "healthy" or running != "running":
+            raise AzureCommandError(
+                f"Base revision {base_revision} is not healthy and running."
+            )
+        current_deployment = (
+            _revision_deployment(revision_response)
+            if isinstance(revision_response, dict)
+            else ""
+        )
+        if not current_deployment:
+            raise AzureCommandError(
+                f"Base revision {base_revision} has no current chat deployment."
+            )
         report["config"]["base_revision"] = base_revision
+        report["config"]["current_deployment"] = current_deployment
         catalog_url = (
             f"https://management.azure.com/subscriptions/{subscription_id}"
             f"/providers/Microsoft.CognitiveServices/locations/{args.location}"
@@ -646,12 +688,56 @@ def run_benchmark(args: argparse.Namespace) -> int:
             judge_sku,
             args.location,
         )
+        current_deployment_details = (
+            judge_deployment
+            if current_deployment == args.judge_deployment
+            else run_az(
+                [
+                    "cognitiveservices",
+                    "account",
+                    "deployment",
+                    "show",
+                    "--resource-group",
+                    args.resource_group,
+                    "--name",
+                    args.ai_account,
+                    "--deployment-name",
+                    current_deployment,
+                ]
+            )
+        )
+        current_model, current_version, current_sku = _model_details(
+            current_deployment_details
+        )
+        if not current_model or not current_version or not current_sku:
+            raise AzureCommandError(
+                "Current deployment model/version/SKU could not be resolved."
+            )
+        current_price = normalize_retail_price(
+            price_items,
+            current_model,
+            current_sku,
+            args.location,
+        )
+        current_candidate = ModelCandidate(
+            name=current_model,
+            version=current_version,
+            model_format="OpenAI",
+            sku=current_sku,
+            quota=None,
+            family="current",
+            deployment_capacity=0,
+            price=current_price,
+            slot="current-model",
+        )
         selected_all = [
             slot.candidate
             for slot in shortlist
             if slot.candidate is not None
         ]
-        selected = [candidate for candidate in selected_all if candidate.price is not None]
+        selected = [current_candidate] + [
+            candidate for candidate in selected_all if candidate.price is not None
+        ]
         excluded_unknown_price = [
             candidate.identifier
             for candidate in selected_all
@@ -668,6 +754,13 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 "version": judge_version,
                 "sku": judge_sku,
                 "price": _price_dict(judge_price),
+            },
+            "current_model": {
+                "deployment": current_deployment,
+                "model": current_model,
+                "version": current_version,
+                "sku": current_sku,
+                "price": _price_dict(current_price),
             },
             "shortlist": [slot.to_dict() for slot in shortlist],
         }
@@ -781,41 +874,57 @@ def run_benchmark(args: argparse.Namespace) -> int:
             revision: str | None = None
             candidate_result = CandidateResult(
                 slot=str(candidate.slot),
-                model=candidate.identifier,
+                model=(
+                    f"{current_deployment} ({candidate.identifier})"
+                    if candidate.slot == "current-model"
+                    else candidate.identifier
+                ),
                 status="running",
                 pricing={"generation": _price_dict(candidate.price), "judge": _price_dict(judge_price)},
             )
             report["candidates"].append(candidate_result.to_dict())
             candidate_dir = args.output_dir / f"{index:02d}-{candidate.slot}"
             try:
-                deployment_to_create = deployment_name(args.run_id, index, candidate.name)
-                _create_deployment(
-                    candidate,
-                    name=deployment_to_create,
-                    resource_group=args.resource_group,
-                    ai_account=args.ai_account,
-                )
-                deployment = deployment_to_create
-                registry["deployments"].append(deployment)
-                write_registry(args.registry, registry)
+                if candidate.slot == "current-model":
+                    endpoint = wait_for_revision(
+                        args.resource_group,
+                        args.container_app,
+                        base_revision,
+                        subscription_id=subscription_id,
+                    )
+                else:
+                    deployment_to_create = deployment_name(
+                        args.run_id,
+                        index,
+                        candidate.name,
+                    )
+                    _create_deployment(
+                        candidate,
+                        name=deployment_to_create,
+                        resource_group=args.resource_group,
+                        ai_account=args.ai_account,
+                    )
+                    deployment = deployment_to_create
+                    registry["deployments"].append(deployment)
+                    write_registry(args.registry, registry)
 
-                suffix = revision_suffix(args.run_id, index)
-                revision = create_revision(
-                    subscription_id=subscription_id,
-                    resource_group=args.resource_group,
-                    container_app=args.container_app,
-                    base_revision=base_revision,
-                    deployment=deployment,
-                    suffix=suffix,
-                )
-                registry["revisions"].append(revision)
-                write_registry(args.registry, registry)
-                endpoint = wait_for_revision(
-                    args.resource_group,
-                    args.container_app,
-                    revision,
-                    subscription_id=subscription_id,
-                )
+                    suffix = revision_suffix(args.run_id, index)
+                    revision = create_revision(
+                        subscription_id=subscription_id,
+                        resource_group=args.resource_group,
+                        container_app=args.container_app,
+                        base_revision=base_revision,
+                        deployment=deployment,
+                        suffix=suffix,
+                    )
+                    registry["revisions"].append(revision)
+                    write_registry(args.registry, registry)
+                    endpoint = wait_for_revision(
+                        args.resource_group,
+                        args.container_app,
+                        revision,
+                        subscription_id=subscription_id,
+                    )
                 question_rows, eval_rows = _run_questions(
                     endpoint,
                     dataset,

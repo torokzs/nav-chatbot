@@ -577,6 +577,19 @@ def estimate_preflight_cost(
     return candidate_cost + judge_cost, []
 
 
+def select_questions(
+    rows: Sequence[Mapping[str, Any]],
+    question_count: int,
+) -> list[Mapping[str, Any]]:
+    if question_count <= 0:
+        raise ValueError("question_count must be greater than zero.")
+    if question_count > len(rows):
+        raise ValueError(
+            f"question_count cannot exceed the dataset size ({len(rows)})."
+        )
+    return list(rows[:question_count])
+
+
 def percentile(values: Sequence[float], percentile_value: float) -> float | None:
     if not values:
         return None
