@@ -203,6 +203,7 @@ jobs:
             --name "$backend_app_name" \
             --from-revision "$stable_revision" \
             --image "${{ steps.backend_image.outputs.image }}" \
+            --set-env-vars AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT=model-router \
             --revision-suffix "$revision_suffix" \
             --output none
 
@@ -346,3 +347,11 @@ jobs:
           fi
           echo "::error::The promoted application health check failed."
           exit 1
+
+      - name: Deactivate failed revision
+        if: failure() && steps.backend_deploy.outcome == 'success'
+        run: >-
+          az containerapp revision deactivate
+          --resource-group "$AZURE_RESOURCE_GROUP"
+          --name "${{ steps.resources.outputs.backend_app_name }}"
+          --revision "${{ steps.backend_deploy.outputs.revision_name }}"
