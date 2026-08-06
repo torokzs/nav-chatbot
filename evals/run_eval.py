@@ -332,6 +332,28 @@ def evaluation_context_to_text(
     return "\n\n".join(content) if content else sources_to_context(sources)
 
 
+def evaluation_context_to_sources(
+    context_chunks: list[dict[str, Any]],
+    fallback_sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    for chunk in context_chunks:
+        metadata = chunk.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        booklet = str(metadata.get("fuzet_szam", "")).strip()
+        if not booklet:
+            continue
+        page_from = int(metadata.get("page_from", 0))
+        sources.append(
+            {
+                "fuzet_szam": booklet,
+                "page_from": page_from,
+                "page_to": int(metadata.get("page_to", page_from)),
+            }
+        )
+    return sources or fallback_sources
+
 
 def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[dict[str, Any]]:
     timeout = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=30.0)
@@ -354,7 +376,13 @@ def build_eval_rows(dataset_rows: list[dict[str, Any]], endpoint: str) -> list[d
                     "expected_fuzet": str(row["expected_fuzet"]),
                     "expected_page": int(row["expected_page"]),
                     "adoev": adoev,
-                    "sources": json.dumps(run_result.sources, ensure_ascii=False),
+                    "sources": json.dumps(
+                        evaluation_context_to_sources(
+                            run_result.evaluation_context,
+                            run_result.sources,
+                        ),
+                        ensure_ascii=False,
+                    ),
                 }
             )
     return eval_rows

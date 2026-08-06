@@ -126,6 +126,8 @@ A retrieval modellfüggetlen: a query rewrite után az embedding deployment és 
 Azure AI Search végzi. A benchmark ezért kérdésenként egyszer, a base revisionön
 futtatja, majd ugyanazt a befagyasztott kontextust adja minden jelölt run-scoped,
 titokkal védett revíziójának. A normál chat nem fogad el context override-ot.
+A citation evaluator a teljes befagyasztott kontextus metadataját ellenőrzi, nem
+a felhasználói felülethez három elemre korlátozott forráslistát.
 
 Az `evals/qa.jsonl` és `evals/qa.smoke.jsonl` kizárólag 2026-os ground truthot
 tartalmaz. Ezt az `adoev` és `ground_truth_tax_year` mező is explicit jelzi; a

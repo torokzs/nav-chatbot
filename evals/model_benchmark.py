@@ -46,6 +46,7 @@ from benchmark_core import (
 )
 from run_eval import (
     call_chat_endpoint,
+    evaluation_context_to_sources,
     evaluation_context_to_text,
     extract_metric,
     load_dataset,
@@ -483,7 +484,13 @@ def _run_questions(
                         "ground_truth": row["expected_answer"],
                         "expected_fuzet": str(row["expected_fuzet"]),
                         "expected_page": int(row["expected_page"]),
-                        "sources": json.dumps(result.sources, ensure_ascii=False),
+                        "sources": json.dumps(
+                            evaluation_context_to_sources(
+                                result.evaluation_context,
+                                result.sources,
+                            ),
+                            ensure_ascii=False,
+                        ),
                     }
                 )
             except Exception as exc:

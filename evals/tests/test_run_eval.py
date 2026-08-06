@@ -8,6 +8,7 @@ import httpx
 from evals.run_eval import (
     CitationCorrectnessEvaluator,
     call_chat_endpoint,
+    evaluation_context_to_sources,
     load_dataset,
 )
 
@@ -122,3 +123,27 @@ def test_call_chat_endpoint_retries_transient_403(monkeypatch) -> None:
         )
 
     assert attempts == 2
+
+
+def test_evaluation_context_sources_include_chunks_beyond_ui_limit() -> None:
+    sources = evaluation_context_to_sources(
+        [
+            {
+                "content": "Szabály",
+                "metadata": {
+                    "fuzet_szam": "012",
+                    "page_from": 8,
+                    "page_to": 8,
+                },
+            }
+        ],
+        [{"fuzet_szam": "005", "page_from": 32, "page_to": 32}],
+    )
+
+    assert sources == [
+        {
+            "fuzet_szam": "012",
+            "page_from": 8,
+            "page_to": 8,
+        }
+    ]
