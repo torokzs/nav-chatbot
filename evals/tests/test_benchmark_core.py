@@ -81,6 +81,25 @@ def test_shortlist_documents_unavailable_family_as_skipped() -> None:
     assert skipped["mistral"].reason
 
 
+@pytest.mark.parametrize("lifecycle_status", ["Deprecated", "Deprecating"])
+def test_model_discovery_skips_non_deployable_lifecycle(
+    lifecycle_status: str,
+) -> None:
+    raw_models = [
+        {
+            "model": {
+                "name": "gpt-5",
+                "version": "2026-01-01",
+                "format": "OpenAI",
+                "lifecycleStatus": lifecycle_status,
+            },
+            "skus": [{"name": "GlobalStandard", "capacity": {"maximum": 100}}],
+        }
+    ]
+
+    assert parse_available_models(raw_models) == []
+
+
 def test_account_quota_caps_capacity_and_skips_exhausted_model() -> None:
     available = candidate("gpt-5-mini", "openai")
     available.deployment_capacity = 10

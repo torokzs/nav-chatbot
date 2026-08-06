@@ -281,15 +281,22 @@ def wait_for_revision(
     deadline = time.monotonic() + timeout_seconds
     last_state = "unknown"
     while time.monotonic() < deadline:
-        payload = run_az(
-            [
-                "rest",
-                "--method",
-                "get",
-                "--url",
-                f"{app_url}/revisions/{revision}?api-version=2024-03-01",
-            ]
-        )
+        try:
+            payload = run_az(
+                [
+                    "rest",
+                    "--method",
+                    "get",
+                    "--url",
+                    f"{app_url}/revisions/{revision}?api-version=2024-03-01",
+                ]
+            )
+        except AzureCommandError as exc:
+            if not _is_not_found(exc):
+                raise
+            last_state = "provisioning"
+            time.sleep(interval_seconds)
+            continue
         properties = payload.get("properties", {}) if isinstance(payload, dict) else {}
         health = str(properties.get("healthState", "")).lower()
         running = str(properties.get("runningState", "")).lower()
@@ -384,4 +391,12 @@ def cleanup_registry(
 
 def _is_not_found(exc: AzureCommandError) -> bool:
     message = str(exc).lower()
-    return any(value in message for value in ("not found", "resourcenotfound", "deploymentnotfound"))
+    return any(
+        value in message
+        for value in (
+            "not found",
+            "resourcenotfound",
+            "deploymentnotfound",
+            "revisionnotfound",
+        )
+    )

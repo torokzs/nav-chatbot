@@ -241,6 +241,9 @@ def parse_available_models(
         name = str(model.get("name", "")).strip()
         version = str(model.get("version", "")).strip()
         model_format = str(model.get("format", model.get("modelFormat", ""))).strip()
+        lifecycle_status = str(
+            model.get("lifecycleStatus", item.get("lifecycleStatus", ""))
+        ).lower()
         family = detect_family(name, model_format)
         skus_value = item.get("skus", model.get("skus", []))
         skus = skus_value if isinstance(skus_value, list) else []
@@ -254,6 +257,7 @@ def parse_available_models(
             or not model_format
             or family is None
             or not _is_chat_candidate(name)
+            or lifecycle_status in {"deprecated", "deprecating"}
         ):
             continue
         for sku, quota, capacity in available_skus:

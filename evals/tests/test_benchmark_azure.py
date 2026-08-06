@@ -8,6 +8,7 @@ from evals.benchmark_azure import (
     deployment_name,
     revision_suffix,
     validate_traffic_isolation,
+    wait_for_revision,
 )
 
 
@@ -89,3 +90,37 @@ def test_build_revision_template_retargets_deployment_without_mutating_base() ->
     assert template["revisionSuffix"] == "b123-1"
     assert template["containers"][0]["env"][0]["value"] == "benchmark-model"
     assert revision["properties"]["template"]["containers"][0]["env"][0]["value"] == "production"
+
+
+def test_wait_for_revision_retries_while_arm_child_is_provisioning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses: list[object] = [
+        AzureCommandError("RevisionNotFound"),
+        {
+            "properties": {
+                "healthState": "Healthy",
+                "runningState": "Running",
+                "fqdn": "benchmark.example.test",
+            }
+        },
+    ]
+
+    def fake_run_az(_args: list[str]) -> object:
+        response = responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr("evals.benchmark_azure.run_az", fake_run_az)
+
+    assert (
+        wait_for_revision(
+            "rg",
+            "app",
+            "app--benchmark",
+            subscription_id="sub",
+            interval_seconds=0,
+        )
+        == "https://benchmark.example.test"
+    )

@@ -429,6 +429,7 @@ def run_foundry_evaluation(
         "data": str(eval_input_path),
         "evaluators": evaluators,
         "evaluator_config": evaluator_config,
+        "max_concurrency": 1,
         "output_path": str(output_path),
     }
     # Cloud logging requires a Foundry project; skip if not configured
