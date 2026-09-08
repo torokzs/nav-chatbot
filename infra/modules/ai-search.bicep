@@ -9,6 +9,13 @@ param location string = resourceGroup().location
 @description('Tags applied to the Azure AI Search service.')
 param tags object = {}
 
+@description('Azure AI Search dedicated pricing tier.')
+@allowed([
+  'basic'
+  'standard'
+])
+param skuName string = 'basic'
+
 resource searchService 'Microsoft.Search/searchServices@2023-11-01' = {
   name: name
   location: location
@@ -16,7 +23,7 @@ resource searchService 'Microsoft.Search/searchServices@2023-11-01' = {
     type: 'SystemAssigned'
   }
   sku: {
-    name: 'standard'
+    name: skuName
   }
   tags: tags
   properties: {

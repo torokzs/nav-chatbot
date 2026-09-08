@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.17.1.54307",
-      "templateHash": "496289657177880613"
+      "templateHash": "9579215599736829158"
     }
   },
   "parameters": {
@@ -60,11 +60,36 @@
         "description": "Backend container image tag."
       }
     },
+    "backendBootstrapImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+      "metadata": {
+        "description": "Backend container image used during initial provisioning before azd builds the application image."
+      }
+    },
     "backendStableRevisionName": {
       "type": "string",
       "defaultValue": "",
       "metadata": {
         "description": "Optional existing stable Container App revision name. When supplied, the latest revision is deployed with 0% traffic for blue/green promotion workflows."
+      }
+    },
+    "deployHosting": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy hosting resources (Container Apps, Static Web App, Container Registry). Set false for local dev with only AI services."
+      }
+    },
+    "searchSkuName": {
+      "type": "string",
+      "defaultValue": "basic",
+      "allowedValues": [
+        "basic",
+        "standard"
+      ],
+      "metadata": {
+        "description": "Azure AI Search dedicated pricing tier."
       }
     }
   },
@@ -254,6 +279,9 @@
           },
           "tags": {
             "value": "[variables('commonTags')]"
+          },
+          "skuName": {
+            "value": "[parameters('searchSkuName')]"
           }
         },
         "template": {
@@ -263,7 +291,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.17.1.54307",
-              "templateHash": "1662343410244837751"
+              "templateHash": "17974177289130075897"
             }
           },
           "parameters": {
@@ -286,6 +314,17 @@
               "metadata": {
                 "description": "Tags applied to the Azure AI Search service."
               }
+            },
+            "skuName": {
+              "type": "string",
+              "defaultValue": "basic",
+              "allowedValues": [
+                "basic",
+                "standard"
+              ],
+              "metadata": {
+                "description": "Azure AI Search dedicated pricing tier."
+              }
             }
           },
           "resources": [
@@ -298,7 +337,7 @@
                 "type": "SystemAssigned"
               },
               "sku": {
-                "name": "standard"
+                "name": "[parameters('skuName')]"
               },
               "tags": "[parameters('tags')]",
               "properties": {
@@ -537,6 +576,7 @@
       ]
     },
     {
+      "condition": "[parameters('deployHosting')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "container-registry",
@@ -847,6 +887,7 @@
       ]
     },
     {
+      "condition": "[parameters('deployHosting')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "container-apps",
@@ -866,21 +907,26 @@
           "tags": {
             "value": "[union(variables('commonTags'), createObject('azd-service-name', 'backend'))]"
           },
-          "containerRegistryLoginServer": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-registry'), '2022-09-01').outputs.loginServer.value]"
-          },
+          "containerRegistryLoginServer": "[if(parameters('deployHosting'), createObject('value', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-registry'), '2022-09-01').outputs.loginServer.value), createObject('value', ''))]",
           "backendContainerImage": {
-            "value": "[format('{0}/{1}:{2}', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-registry'), '2022-09-01').outputs.loginServer.value, parameters('backendImageName'), parameters('backendImageTag'))]"
+            "value": "[parameters('backendBootstrapImage')]"
           },
           "stableRevisionName": {
             "value": "[parameters('backendStableRevisionName')]"
           },
-          "keyVaultSecretUris": {
+          "minReplicas": {
+            "value": 0
+          },
+          "maxReplicas": {
+            "value": 3
+          },
+          "envVars": {
             "value": {
-              "aiSearchEndpoint": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'key-vault'), '2022-09-01').outputs.aiSearchEndpointSecretUri.value]",
-              "aiFoundryEndpoint": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'key-vault'), '2022-09-01').outputs.aiFoundryEndpointSecretUri.value]",
-              "docIntelligenceEndpoint": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'key-vault'), '2022-09-01').outputs.docIntelligenceEndpointSecretUri.value]",
-              "appInsightsConnectionString": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'key-vault'), '2022-09-01').outputs.appInsightsConnectionStringSecretUri.value]"
+              "aiSearchEndpoint": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'ai-search'), '2022-09-01').outputs.endpoint.value]",
+              "aiFoundryEndpoint": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'ai-foundry'), '2022-09-01').outputs.endpoint.value]",
+              "docIntelligenceEndpoint": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'doc-intelligence'), '2022-09-01').outputs.endpoint.value]",
+              "appInsightsConnectionString": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'app-insights'), '2022-09-01').outputs.connectionString.value]",
+              "frontendOrigin": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'static-web-app'), '2022-09-01').outputs.url.value]"
             }
           }
         },
@@ -891,7 +937,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.17.1.54307",
-              "templateHash": "18052957192378337073"
+              "templateHash": "3841014735780552690"
             }
           },
           "parameters": {
@@ -934,10 +980,27 @@
                 "description": "Optional existing stable revision name. When supplied, the latest revision is deployed at 0% traffic for blue/green rollouts."
               }
             },
-            "keyVaultSecretUris": {
-              "type": "object",
+            "minReplicas": {
+              "type": "int",
+              "defaultValue": 0,
+              "minValue": 0,
               "metadata": {
-                "description": "Key Vault secret URIs consumed by the backend application."
+                "description": "Minimum replicas per active revision. Use zero to enable scale-to-zero."
+              }
+            },
+            "maxReplicas": {
+              "type": "int",
+              "defaultValue": 3,
+              "minValue": 1,
+              "metadata": {
+                "description": "Maximum replicas per active revision."
+              }
+            },
+            "envVars": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Environment variables for the backend app (endpoints, config)."
               }
             }
           },
@@ -945,7 +1008,7 @@
             "workspaceName": "[take(replace(format('log-{0}', parameters('name')), '--', '-'), 63)]",
             "environmentName": "[take(replace(format('cae-{0}', parameters('name')), '--', '-'), 60)]",
             "backendAppName": "[take(replace(format('{0}-backend', parameters('name')), '--', '-'), 32)]",
-            "trafficRules": "[if(empty(parameters('stableRevisionName')), createArray(createObject('latestRevision', true(), 'weight', 100)), createArray(createObject('revisionName', parameters('stableRevisionName'), 'weight', 100), createObject('latestRevision', true(), 'label', 'staging', 'weight', 0)))]"
+            "trafficRules": "[if(empty(parameters('stableRevisionName')), createArray(createObject('latestRevision', true(), 'weight', 100)), createArray(createObject('revisionName', parameters('stableRevisionName'), 'weight', 100)))]"
           },
           "resources": [
             {
@@ -955,15 +1018,13 @@
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "properties": {
-                "features": {
-                  "enableLogAccessUsingOnlyResourcePermissions": true
-                },
                 "retentionInDays": 30,
+                "features": {
+                  "searchVersion": 1
+                },
                 "sku": {
                   "name": "PerGB2018"
-                },
-                "publicNetworkAccessForIngestion": "Enabled",
-                "publicNetworkAccessForQuery": "Enabled"
+                }
               }
             },
             {
@@ -998,41 +1059,14 @@
                 "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]",
                 "configuration": {
                   "activeRevisionsMode": "Multiple",
+                  "registries": "[if(empty(parameters('containerRegistryLoginServer')), createArray(), createArray(createObject('server', parameters('containerRegistryLoginServer'), 'identity', 'system')))]",
                   "ingress": {
                     "external": true,
                     "targetPort": 8000,
                     "transport": "http",
                     "allowInsecure": false,
                     "traffic": "[variables('trafficRules')]"
-                  },
-                  "registries": [
-                    {
-                      "server": "[parameters('containerRegistryLoginServer')]",
-                      "identity": "system"
-                    }
-                  ],
-                  "secrets": [
-                    {
-                      "name": "ai-search-endpoint",
-                      "keyVaultUrl": "[parameters('keyVaultSecretUris').aiSearchEndpoint]",
-                      "identity": "system"
-                    },
-                    {
-                      "name": "ai-foundry-endpoint",
-                      "keyVaultUrl": "[parameters('keyVaultSecretUris').aiFoundryEndpoint]",
-                      "identity": "system"
-                    },
-                    {
-                      "name": "doc-intelligence-endpoint",
-                      "keyVaultUrl": "[parameters('keyVaultSecretUris').docIntelligenceEndpoint]",
-                      "identity": "system"
-                    },
-                    {
-                      "name": "app-insights-connection-string",
-                      "keyVaultUrl": "[parameters('keyVaultSecretUris').appInsightsConnectionString]",
-                      "identity": "system"
-                    }
-                  ]
+                  }
                 },
                 "template": {
                   "containers": [
@@ -1041,20 +1075,32 @@
                       "image": "[parameters('backendContainerImage')]",
                       "env": [
                         {
-                          "name": "AI_SEARCH_ENDPOINT",
-                          "secretRef": "ai-search-endpoint"
+                          "name": "AZURE_SEARCH_ENDPOINT",
+                          "value": "[if(contains(parameters('envVars'), 'aiSearchEndpoint'), parameters('envVars').aiSearchEndpoint, '')]"
                         },
                         {
-                          "name": "AI_FOUNDRY_ENDPOINT",
-                          "secretRef": "ai-foundry-endpoint"
+                          "name": "AZURE_AI_FOUNDRY_ENDPOINT",
+                          "value": "[if(contains(parameters('envVars'), 'aiFoundryEndpoint'), parameters('envVars').aiFoundryEndpoint, '')]"
                         },
                         {
-                          "name": "DOC_INTELLIGENCE_ENDPOINT",
-                          "secretRef": "doc-intelligence-endpoint"
+                          "name": "AZURE_AI_FOUNDRY_CHAT_DEPLOYMENT",
+                          "value": "model-router"
+                        },
+                        {
+                          "name": "AZURE_AI_FOUNDRY_EMBEDDING_DEPLOYMENT",
+                          "value": "text-embedding-3-large"
+                        },
+                        {
+                          "name": "AZURE_DOC_INTELLIGENCE_ENDPOINT",
+                          "value": "[if(contains(parameters('envVars'), 'docIntelligenceEndpoint'), parameters('envVars').docIntelligenceEndpoint, '')]"
                         },
                         {
                           "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
-                          "secretRef": "app-insights-connection-string"
+                          "value": "[if(contains(parameters('envVars'), 'appInsightsConnectionString'), parameters('envVars').appInsightsConnectionString, '')]"
+                        },
+                        {
+                          "name": "FRONTEND_ORIGIN",
+                          "value": "[if(contains(parameters('envVars'), 'frontendOrigin'), parameters('envVars').frontendOrigin, 'http://localhost:3000')]"
                         }
                       ],
                       "resources": {
@@ -1064,8 +1110,8 @@
                     }
                   ],
                   "scale": {
-                    "minReplicas": 1,
-                    "maxReplicas": 10
+                    "minReplicas": "[parameters('minReplicas')]",
+                    "maxReplicas": "[parameters('maxReplicas')]"
                   }
                 }
               },
@@ -1100,12 +1146,17 @@
         }
       },
       "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'ai-foundry')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'ai-search')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'app-insights')]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-registry')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'key-vault')]",
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('resourceGroupName'))]"
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'doc-intelligence')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('resourceGroupName'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'static-web-app')]"
       ]
     },
     {
+      "condition": "[parameters('deployHosting')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "static-web-app",
@@ -1120,7 +1171,7 @@
             "value": "[variables('staticWebAppName')]"
           },
           "location": {
-            "value": "[parameters('location')]"
+            "value": "westeurope"
           },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('azd-service-name', 'frontend'))]"
@@ -1133,7 +1184,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.17.1.54307",
-              "templateHash": "1192808187912123800"
+              "templateHash": "17463220205997962228"
             }
           },
           "parameters": {
@@ -1155,6 +1206,13 @@
               "defaultValue": {},
               "metadata": {
                 "description": "Tags applied to the Static Web App."
+              }
+            },
+            "backendApiUrl": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Backend API URL for linked backend configuration."
               }
             }
           },
@@ -1190,12 +1248,12 @@
               },
               "value": "[resourceId('Microsoft.Web/staticSites', parameters('name'))]"
             },
-            "deploymentTokenReference": {
+            "name": {
               "type": "string",
               "metadata": {
-                "description": "Deployment token retrieval reference for CI/CD automation."
+                "description": "Static Web App name for CLI deployment."
               },
-              "value": "Invoke listSecrets for Microsoft.Web/staticSites using apiVersion 2022-03-01 and read properties.apiKey."
+              "value": "[parameters('name')]"
             }
           }
         }
@@ -1305,6 +1363,7 @@
       ]
     },
     {
+      "condition": "[parameters('deployHosting')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "rbac",
@@ -1315,12 +1374,7 @@
         },
         "mode": "Incremental",
         "parameters": {
-          "containerAppPrincipalId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-apps'), '2022-09-01').outputs.managedIdentityPrincipalId.value]"
-          },
-          "githubActionsPrincipalId": {
-            "value": "[parameters('githubActionsPrincipalId')]"
-          },
+          "containerAppPrincipalId": "[if(parameters('deployHosting'), createObject('value', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-apps'), '2022-09-01').outputs.managedIdentityPrincipalId.value), createObject('value', ''))]",
           "keyVaultResourceId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'key-vault'), '2022-09-01').outputs.resourceId.value]"
           },
@@ -1333,9 +1387,7 @@
           "docIntelligenceResourceId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'doc-intelligence'), '2022-09-01').outputs.resourceId.value]"
           },
-          "containerRegistryResourceId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-registry'), '2022-09-01').outputs.resourceId.value]"
-          }
+          "containerRegistryResourceId": "[if(parameters('deployHosting'), createObject('value', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-registry'), '2022-09-01').outputs.resourceId.value), createObject('value', ''))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -1344,7 +1396,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.17.1.54307",
-              "templateHash": "8521681169614059648"
+              "templateHash": "5904921501189404792"
             }
           },
           "parameters": {
@@ -1352,13 +1404,6 @@
               "type": "string",
               "metadata": {
                 "description": "Container App managed identity principal ID."
-              }
-            },
-            "githubActionsPrincipalId": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "Optional GitHub Actions service principal object ID."
               }
             },
             "keyVaultResourceId": {
@@ -1400,15 +1445,12 @@
             }
           },
           "variables": {
-            "contributorRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
             "keyVaultSecretsUserRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
-            "keyVaultSecretsOfficerRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')]",
             "searchIndexDataReaderRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '1407120a-92aa-4202-b7e9-c0e197c71c8f')]",
-            "cognitiveServicesOpenAIUserRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b3e8bca5-c4f8-47b7-a51c-adb3d2511d46')]",
-            "cognitiveServicesUserRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'bfa99427-4434-4bcb-9824-37b82d74c9c7')]",
+            "cognitiveServicesOpenAIUserRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')]",
+            "cognitiveServicesUserRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')]",
             "storageBlobDataReaderRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')]",
             "acrPullRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
-            "assignGitHubActionsPrincipal": "[not(empty(parameters('githubActionsPrincipalId')))]",
             "assignStorageRole": "[not(empty(parameters('storageAccountResourceId')))]"
           },
           "resources": [
@@ -1478,29 +1520,6 @@
                 "principalId": "[parameters('containerAppPrincipalId')]",
                 "principalType": "ServicePrincipal"
               }
-            },
-            {
-              "condition": "[variables('assignGitHubActionsPrincipal')]",
-              "type": "Microsoft.Authorization/roleAssignments",
-              "apiVersion": "2022-04-01",
-              "name": "[guid(resourceGroup().id, parameters('githubActionsPrincipalId'), variables('contributorRoleDefinitionId'))]",
-              "properties": {
-                "roleDefinitionId": "[variables('contributorRoleDefinitionId')]",
-                "principalId": "[parameters('githubActionsPrincipalId')]",
-                "principalType": "ServicePrincipal"
-              }
-            },
-            {
-              "condition": "[variables('assignGitHubActionsPrincipal')]",
-              "type": "Microsoft.Authorization/roleAssignments",
-              "apiVersion": "2022-04-01",
-              "scope": "[format('Microsoft.KeyVault/vaults/{0}', last(split(parameters('keyVaultResourceId'), '/')))]",
-              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', last(split(parameters('keyVaultResourceId'), '/'))), parameters('githubActionsPrincipalId'), variables('keyVaultSecretsOfficerRoleDefinitionId'))]",
-              "properties": {
-                "roleDefinitionId": "[variables('keyVaultSecretsOfficerRoleDefinitionId')]",
-                "principalId": "[parameters('githubActionsPrincipalId')]",
-                "principalType": "ServicePrincipal"
-              }
             }
           ]
         }
@@ -1529,14 +1548,14 @@
       "metadata": {
         "description": "Backend Container App URL."
       },
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-apps'), '2022-09-01').outputs.fqdn.value]"
+      "value": "[if(parameters('deployHosting'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-apps'), '2022-09-01').outputs.fqdn.value, '')]"
     },
     "frontendUrl": {
       "type": "string",
       "metadata": {
         "description": "Frontend Static Web App URL."
       },
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'static-web-app'), '2022-09-01').outputs.url.value]"
+      "value": "[if(parameters('deployHosting'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'static-web-app'), '2022-09-01').outputs.url.value, '')]"
     },
     "searchEndpoint": {
       "type": "string",
@@ -1557,14 +1576,14 @@
       "metadata": {
         "description": "Backend Container App URL for azd environment projection."
       },
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-apps'), '2022-09-01').outputs.fqdn.value]"
+      "value": "[if(parameters('deployHosting'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'container-apps'), '2022-09-01').outputs.fqdn.value, '')]"
     },
     "WEB_URL": {
       "type": "string",
       "metadata": {
         "description": "Frontend Static Web App URL for azd environment projection."
       },
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'static-web-app'), '2022-09-01').outputs.url.value]"
+      "value": "[if(parameters('deployHosting'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'static-web-app'), '2022-09-01').outputs.url.value, '')]"
     },
     "AZURE_SEARCH_ENDPOINT": {
       "type": "string",
@@ -1579,6 +1598,20 @@
         "description": "Azure Key Vault name for azd environment projection."
       },
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'key-vault'), '2022-09-01').outputs.name.value]"
+    },
+    "AZURE_AI_FOUNDRY_ENDPOINT": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure AI Foundry endpoint."
+      },
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'ai-foundry'), '2022-09-01').outputs.endpoint.value]"
+    },
+    "AZURE_DOC_INTELLIGENCE_ENDPOINT": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure Document Intelligence endpoint."
+      },
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', 'doc-intelligence'), '2022-09-01').outputs.endpoint.value]"
     },
     "AZURE_CONTAINER_REGISTRY_ENDPOINT": {
       "type": "string",

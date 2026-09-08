@@ -18,6 +18,14 @@ param backendContainerImage string
 @description('Optional existing stable revision name. When supplied, the latest revision is deployed at 0% traffic for blue/green rollouts.')
 param stableRevisionName string = ''
 
+@description('Minimum replicas per active revision. Use zero to enable scale-to-zero.')
+@minValue(0)
+param minReplicas int = 0
+
+@description('Maximum replicas per active revision.')
+@minValue(1)
+param maxReplicas int = 3
+
 @description('Environment variables for the backend app (endpoints, config).')
 param envVars object = {}
 
@@ -33,11 +41,6 @@ var trafficRules = empty(stableRevisionName) ? [
   {
     revisionName: stableRevisionName
     weight: 100
-  }
-  {
-    latestRevision: true
-    label: 'staging'
-    weight: 0
   }
 ]
 
@@ -138,8 +141,8 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 1
-        maxReplicas: 10
+        minReplicas: minReplicas
+        maxReplicas: maxReplicas
       }
     }
   }

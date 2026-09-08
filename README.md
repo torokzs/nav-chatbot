@@ -107,16 +107,20 @@ _TBD – deployment közben frissítendő._
 
 ## Költségbecslés
 
-Becsült havi költség (nagyságrendi, használattól függően):
+Költségoptimalizált havi becslés (nagyságrendi, használattól függően):
 
-- AI Search Standard: ~$250/month
-- Container Apps: ~$50/month
+- AI Search Basic (1 replika × 1 partíció): ~$73/month
+- Container Apps (Consumption, scale-to-zero): üresjáratban ~$0; aktív használat alapján számlázott
 - Static Web Apps: ~$9/month (Standard)
 - AI Foundry (model-router): usage-based (~$10-50/month depending on volume)
 - Document Intelligence: usage-based (~$5-20 for initial processing)
 - Fabric F4: ~$260/month (can be paused)
-- Key Vault, App Insights: ~$5-10/month
-- **Total estimate: ~$600-650/month** (Fabric running), ~$340-390/month (Fabric paused after indexing)
+- Container Registry, Key Vault, Defender és monitoring: ~$30-60/month
+- **Total estimate: ~$390-470/month** (Fabric running), ~$130-210/month (Fabric paused after indexing)
+
+A backend `minReplicas: 0` beállítása hidegindítást okozhat az első kérésnél. A CI/CD
+multiple-revision módban csak a tesztelt revíziót promoválja, a korábbi és sikertelen
+revíziókat pedig deaktiválja, hogy 0% forgalom mellett se maradjon számlázható replika.
 
 ## Licenc
 

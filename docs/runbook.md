@@ -117,7 +117,17 @@ Megjegyzés: a `03_embed_index.py` notebook `create_or_update_index` hívással 
 
 ## 5. Container Apps revízió kezelése
 
-A backend Container App **multiple revisions** módban fut, ezért támogatott a kézi forgalomterelés és rollback.
+A backend Container App **multiple revisions** és **scale-to-zero** módban fut. A
+`minReplicas: 0` csökkenti az üresjárati költséget, de az első kérés hidegindítást
+okozhat.
+
+A deployment folyamat:
+
+1. megtartja a forgalmat kapó stabil revíziót,
+2. `staging` label alatt teszteli a candidate revíziót,
+3. csak a quality gate után ad neki 100% forgalmat,
+4. siker után deaktivál minden korábbi revíziót,
+5. sikertelen quality gate esetén deaktiválja a 0% forgalmú candidate revíziót.
 
 ### Aktuális revíziók listázása
 
@@ -142,7 +152,15 @@ az containerapp ingress traffic set \
 
 ### Rollback előző revízióra
 
+Az automatikus cleanup deaktiválja a korábbi revíziókat. Rollback előtt aktiváld a
+kiválasztott revíziót, majd állítsd át a forgalmat:
+
 ```bash
+az containerapp revision activate \
+  --name <backend-app-name> \
+  --resource-group nav-chatbot-rg \
+  --revision <previous-revision>
+
 az containerapp ingress traffic set \
   --name <backend-app-name> \
   --resource-group nav-chatbot-rg \
@@ -155,6 +173,28 @@ az containerapp ingress traffic set \
 - SSE chat stream elindul-e
 - nincs-e 5xx spike az Application Insightsban
 - a latency romlott-e az előző revízióhoz képest
+- csak a 100% forgalmat kapó revízió aktív-e
+
+```bash
+az containerapp revision list \
+  --name <backend-app-name> \
+  --resource-group nav-chatbot-rg \
+  --query '[].{Name:name,Active:properties.active,Traffic:properties.trafficWeight,Replicas:properties.replicas}' \
+  -o table
+```
+
+### Egyszeri régi revízió-cleanup
+
+Az első költségoptimalizált deployment előtt a régi, 0% forgalmú revíziókat
+deaktiválni kell. A forgalmat kapó revízió nevét mindig ellenőrizd, és azt ne
+deaktiváld.
+
+```bash
+az containerapp revision deactivate \
+  --name <backend-app-name> \
+  --resource-group nav-chatbot-rg \
+  --revision <zero-traffic-revision>
+```
 
 ## 6. Hibaelhárítás
 
@@ -253,7 +293,8 @@ traces
 Ajánlott rutinok:
 
 - **Fabric capacity pause**, amikor nincs ingest vagy eval futás
-- **Container Apps skálázás visszavétele** munkaidőn kívül
+- **Container Apps scale-to-zero** és a 0% forgalmú aktív revíziók megszüntetése
+- AI Search tárhely-, vektor- és throttling limitek ellenőrzése
 - csak szükség esetén teljes újraindexelés
 - smoke eval futtatása teljes eval előtt
 - App Insights retention és lekérdezési volumen figyelése
@@ -264,9 +305,28 @@ Példa Container Apps skálázásra:
 az containerapp update \
   --name <backend-app-name> \
   --resource-group nav-chatbot-rg \
-  --min-replicas 1 \
+  --min-replicas 0 \
   --max-replicas 3
 ```
+
+Az AI Search Basic célkonfiguráció 1 replika × 1 partíció. A jelenlegi két index
+jóval a Basic limitek alatt van, de minden újraindexelés után ellenőrizd:
+
+```bash
+az monitor metrics list \
+  --resource <search-service-resource-id> \
+  --metrics IndexStorageUsage IndexVectorUsage ThrottledSearchQueriesPercentage \
+  --interval PT1H \
+  --aggregation Average Maximum
+```
+
+Havi költségellenőrzéskor külön figyeld:
+
+- aktív Container Apps revíziók száma,
+- 0% forgalmú, mégis aktív revíziók,
+- Container Apps active/idle vCPU és memória,
+- AI Search tier és Search Unit szám,
+- Log Analytics adatbefogadás.
 
 ## 9. Javasolt üzemeltetési rutin
 
@@ -278,6 +338,8 @@ az containerapp update \
 ### Heti
 
 - költségellenőrzés
+- aktív és 0% forgalmú Container Apps revíziók ellenőrzése
+- AI Search storage/vector usage és throttling ellenőrzése
 - retrieval minőség smoke eval alapján
 - index és Delta táblák konzisztenciaellenőrzése
 
