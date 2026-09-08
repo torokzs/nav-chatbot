@@ -11,6 +11,13 @@ param environmentName string
 @maxLength(18)
 param resourceNamePrefix string
 
+@description('Azure AI Search dedicated pricing tier.')
+@allowed([
+  'basic'
+  'standard'
+])
+param searchSkuName string = 'basic'
+
 var uniqueSuffix = take(uniqueString(subscription().id, environmentName, location), 6)
 var normalizedPrefix = toLower(resourceNamePrefix)
 var resourceGroupName = 'nav-chatbot-rg'
@@ -43,6 +50,7 @@ module aiSearch './modules/ai-search.bicep' = {
     name: 'srch-${normalizedPrefix}-${uniqueSuffix}'
     location: location
     tags: commonTags
+    skuName: searchSkuName
   }
 }
 

@@ -49,6 +49,8 @@ module containerApps './modules/container-apps.bicep' = {
     tags: commonTags
     containerRegistryLoginServer: containerRegistry.outputs.loginServer
     backendContainerImage: backendContainerImage
+    minReplicas: 0
+    maxReplicas: 3
     envVars: {
       aiSearchEndpoint: 'https://srch-${normalizedPrefix}-${uniqueSuffix}.search.windows.net'
       aiFoundryEndpoint: 'https://cog-${normalizedPrefix}-${uniqueSuffix}.cognitiveservices.azure.com'

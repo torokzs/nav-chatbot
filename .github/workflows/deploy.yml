@@ -78,8 +78,26 @@ jobs:
           fi
           BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv 2>/dev/null || true)
           if [ -n "$BACKEND_APP_NAME" ]; then
-            STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
+            STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query 'properties.configuration.ingress.traffic[?weight > `0`].revisionName | [0]' -o tsv)
+            if [ -z "$STABLE_REVISION" ]; then
+              STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
+            fi
             azd env set BACKEND_STABLE_REVISION_NAME "$STABLE_REVISION"
+
+            ZERO_TRAFFIC_REVISIONS=$(az containerapp revision list \
+              --name "$BACKEND_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --query '[?properties.active && properties.trafficWeight == `0`].name' \
+              --output tsv)
+            while IFS= read -r revision; do
+              if [ -n "$revision" ] && [ "$revision" != "$STABLE_REVISION" ]; then
+                az containerapp revision deactivate \
+                  --name "$BACKEND_APP_NAME" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --revision "$revision" \
+                  --output none
+              fi
+            done <<< "$ZERO_TRAFFIC_REVISIONS"
           else
             azd env set BACKEND_STABLE_REVISION_NAME ""
           fi
@@ -99,6 +117,8 @@ jobs:
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
     outputs:
       backend_url: ${{ steps.deploy_metadata.outputs.backend_url }}
+      production_url: ${{ steps.deploy_metadata.outputs.production_url }}
+      stable_revision: ${{ steps.backend_metadata.outputs.stable_revision }}
       revision_name: ${{ steps.deploy_metadata.outputs.revision_name }}
       container_app_name: ${{ steps.deploy_metadata.outputs.container_app_name }}
       resource_group: ${{ steps.deploy_metadata.outputs.resource_group }}
@@ -135,7 +155,10 @@ jobs:
           azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR_ENDPOINT"
           BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv 2>/dev/null || true)
           if [ -n "$BACKEND_APP_NAME" ]; then
-            STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
+            STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query 'properties.configuration.ingress.traffic[?weight > `0`].revisionName | [0]' -o tsv)
+            if [ -z "$STABLE_REVISION" ]; then
+              STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
+            fi
             azd env set BACKEND_STABLE_REVISION_NAME "$STABLE_REVISION"
           else
             azd env set BACKEND_STABLE_REVISION_NAME ""
@@ -147,7 +170,14 @@ jobs:
         run: |
           BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv)
           BACKEND_FQDN=$(az resource show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --resource-type Microsoft.App/containerApps --api-version 2024-03-01 --query properties.configuration.ingress.fqdn -o tsv)
+          STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query 'properties.configuration.ingress.traffic[?weight > `0`].revisionName | [0]' -o tsv)
+          if [ -z "$STABLE_REVISION" ]; then
+            STABLE_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
+          fi
+          PREVIOUS_REVISION=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
           echo "backend_url=https://$BACKEND_FQDN" >> "$GITHUB_OUTPUT"
+          echo "stable_revision=$STABLE_REVISION" >> "$GITHUB_OUTPUT"
+          echo "previous_revision=$PREVIOUS_REVISION" >> "$GITHUB_OUTPUT"
 
       - name: Deploy application
         run: azd deploy --no-prompt
@@ -160,15 +190,31 @@ jobs:
       - name: Capture deployment metadata
         id: deploy_metadata
         shell: bash
+        env:
+          PREVIOUS_REVISION: ${{ steps.backend_metadata.outputs.previous_revision }}
         run: |
           BACKEND_APP_NAME=$(az resource list -g "$AZURE_RESOURCE_GROUP" --resource-type Microsoft.App/containerApps --query "[?tags.\"azd-service-name\"=='backend'] | [0].name" -o tsv)
           REVISION_NAME=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.latestReadyRevisionName -o tsv)
           BACKEND_FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$BACKEND_APP_NAME" --query properties.configuration.ingress.fqdn -o tsv)
-          echo "backend_url=https://$BACKEND_FQDN" >> "$GITHUB_OUTPUT"
+          if [ "$REVISION_NAME" = "$PREVIOUS_REVISION" ]; then
+            echo "Deployment did not create a new ready revision." >&2
+            exit 1
+          fi
+          az containerapp revision label add \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --label staging \
+            --revision "$REVISION_NAME" \
+            --yes \
+            --output none
+          APP_DOMAIN="${BACKEND_FQDN#*.}"
+          STAGING_URL="https://${BACKEND_APP_NAME}---staging.${APP_DOMAIN}"
+          echo "backend_url=$STAGING_URL" >> "$GITHUB_OUTPUT"
+          echo "production_url=https://$BACKEND_FQDN" >> "$GITHUB_OUTPUT"
           echo "revision_name=$REVISION_NAME" >> "$GITHUB_OUTPUT"
           echo "container_app_name=$BACKEND_APP_NAME" >> "$GITHUB_OUTPUT"
           echo "resource_group=$AZURE_RESOURCE_GROUP" >> "$GITHUB_OUTPUT"
-          echo "New revision available at https://$BACKEND_FQDN"
+          echo "Candidate revision available at $STAGING_URL"
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -189,6 +235,14 @@ jobs:
 
       - name: Install test dependencies
         run: pip install -r tests/integration/requirements.txt
+
+      - name: Warm candidate revision
+        env:
+          BACKEND_URL: ${{ needs.deploy.outputs.backend_url }}
+        run: |
+          curl --fail --silent --show-error \
+            --retry 12 --retry-all-errors --retry-delay 10 \
+            "$BACKEND_URL/health"
 
       - name: Run smoke integration tests
         run: pytest tests/integration/test_smoke.py -q
@@ -224,6 +278,14 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Warm candidate revision
+        env:
+          BACKEND_URL: ${{ needs.integration-tests.outputs.backend_url }}
+        run: |
+          curl --fail --silent --show-error \
+            --retry 12 --retry-all-errors --retry-delay 10 \
+            "$BACKEND_URL/health"
 
       - name: Run smoke evaluation
         run: python evals/run_eval.py --endpoint "$BACKEND_URL" --smoke
@@ -268,6 +330,14 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Warm candidate revision
+        env:
+          BACKEND_URL: ${{ needs.integration-tests.outputs.backend_url }}
+        run: |
+          curl --fail --silent --show-error \
+            --retry 12 --retry-all-errors --retry-delay 10 \
+            "$BACKEND_URL/health"
 
       - name: Run full evaluation
         run: python evals/run_eval.py --endpoint "$BACKEND_URL"
@@ -355,12 +425,117 @@ jobs:
               sys.exit(1)
           PY
 
-  test-release-ready:
+  promote:
     runs-on: ubuntu-latest
     needs:
       - deploy
       - quality-gate
     if: ${{ always() && needs.deploy.result == 'success' && needs.quality-gate.result == 'success' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
     steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Promote candidate and deactivate old revisions
+        shell: bash
+        env:
+          BACKEND_APP_NAME: ${{ needs.deploy.outputs.container_app_name }}
+          CANDIDATE_URL: ${{ needs.deploy.outputs.backend_url }}
+          REVISION_NAME: ${{ needs.deploy.outputs.revision_name }}
+          PRODUCTION_URL: ${{ needs.deploy.outputs.production_url }}
+          STABLE_REVISION: ${{ needs.deploy.outputs.stable_revision }}
+        run: |
+          set -euo pipefail
+
+          curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors --retry-delay 5 \
+            "$CANDIDATE_URL/health"
+
+          az containerapp ingress traffic set \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision-weight "$REVISION_NAME=100" \
+            --output none
+
+          if ! curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors --retry-delay 5 \
+            "$PRODUCTION_URL/health"; then
+            if [ -n "$STABLE_REVISION" ]; then
+              az containerapp ingress traffic set \
+                --name "$BACKEND_APP_NAME" \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --revision-weight "$STABLE_REVISION=100" \
+                --output none
+            fi
+            exit 1
+          fi
+
+          ACTIVE_REVISIONS=$(az containerapp revision list \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query '[?properties.active].name' \
+            --output tsv)
+          while IFS= read -r revision; do
+            if [ -n "$revision" ] && [ "$revision" != "$REVISION_NAME" ]; then
+              az containerapp revision deactivate \
+                --name "$BACKEND_APP_NAME" \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --revision "$revision" \
+                --output none
+            fi
+          done <<< "$ACTIVE_REVISIONS"
+
+          az containerapp revision label remove \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --label staging \
+            --output none
+
       - name: Confirm test release
-        run: echo "The pull request revision passed the complete test deployment quality gate."
+        run: echo "The tested candidate is live and obsolete revisions are inactive."
+
+  cleanup-failed-candidate:
+    runs-on: ubuntu-latest
+    needs:
+      - deploy
+      - quality-gate
+      - promote
+    if: ${{ always() && needs.deploy.result == 'success' && (needs.quality-gate.result != 'success' || needs.promote.result != 'success') }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.AZURE_ENV_NAME || 'test' }}
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deactivate failed candidate
+        shell: bash
+        env:
+          BACKEND_APP_NAME: ${{ needs.deploy.outputs.container_app_name }}
+          REVISION_NAME: ${{ needs.deploy.outputs.revision_name }}
+        run: |
+          set -euo pipefail
+
+          TRAFFIC_WEIGHT=$(az containerapp revision show \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision "$REVISION_NAME" \
+            --query properties.trafficWeight \
+            --output tsv)
+
+          if [ "${TRAFFIC_WEIGHT:-0}" = "0" ]; then
+            az containerapp revision deactivate \
+              --name "$BACKEND_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --revision "$REVISION_NAME" \
+              --output none
+          else
+            echo "Candidate has traffic weight $TRAFFIC_WEIGHT; refusing to deactivate it." >&2
+            exit 1
+          fi

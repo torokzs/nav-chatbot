@@ -34,6 +34,13 @@ param backendStableRevisionName string = ''
 @description('Deploy hosting resources (Container Apps, Static Web App, Container Registry). Set false for local dev with only AI services.')
 param deployHosting bool = true
 
+@description('Azure AI Search dedicated pricing tier.')
+@allowed([
+  'basic'
+  'standard'
+])
+param searchSkuName string = 'basic'
+
 var abbreviations = loadJsonContent('./abbreviations.json')
 var uniqueSuffix = take(uniqueString(subscription().id, environmentName, location), 6)
 var normalizedPrefix = toLower(resourceNamePrefix)
@@ -77,6 +84,7 @@ module aiSearch './modules/ai-search.bicep' = {
     name: searchServiceName
     location: location
     tags: commonTags
+    skuName: searchSkuName
   }
 }
 
@@ -136,6 +144,8 @@ module containerApps './modules/container-apps.bicep' = if (deployHosting) {
     containerRegistryLoginServer: deployHosting ? containerRegistry.outputs.loginServer : ''
     backendContainerImage: backendBootstrapImage
     stableRevisionName: backendStableRevisionName
+    minReplicas: 0
+    maxReplicas: 3
     envVars: {
       aiSearchEndpoint: aiSearch.outputs.endpoint
       aiFoundryEndpoint: aiFoundry.outputs.endpoint
